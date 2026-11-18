@@ -1,0 +1,42 @@
+/*
+ * 无线数据线 · oink-ui 变量桥接层（生成产物，请勿手改）
+ *
+ * 由 tokens/generate.mjs 从 tokens/design-tokens.json 生成。
+ * 作用：把跨端令牌翻译成 oink-ui 组件认识的变量名（--ok-*）。
+ *
+ * 必须在 oink-ui/styles.css 之后引入 —— 否则会被 oink-ui 的默认值覆盖。
+ */
+
+:root {
+  color-scheme: light;
+
+  /* ---- 强调色：蓝（沿用 oink-ui 的 data-accent=blue 定义）---- */
+  --ok-accent: #2E7BFF;
+  --ok-accent-deep: #1D5FD1;
+  --ok-on-accent: #FFFFFF;
+
+  /* ---- 圆角密度：工具型软件，收一档 ---- */
+  --ok-rk: 1.18;
+
+  /* ---- 字号阶梯：营销级 → 工具级 ---- */
+  --ok-fs-display: 40px;
+  --ok-fs-h1: 24px;
+  --ok-fs-h2: 19px;
+  --ok-fs-h3: 16px;
+  --ok-fs-h4: 14px;
+
+  /* ---- oink-ui 组件高度：桌面端比触控板矮一档，信息密度更高 ---- */
+  --ok-h-sm: 30px;
+  --ok-h-md: 36px;
+  --ok-h-lg: 44px;
+  --ok-h-item: 38px;
+  --ok-h-item-sub: 32px;
+}
+
+/* 深色：沿用 oink-ui 的 [data-theme=dark] 令牌表，仅调整强调色呈现 */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --ok-accent: #2E7BFF;
+  --ok-accent-deep: #6BA5FF;
+  --ok-on-accent: #0B1220;
+}

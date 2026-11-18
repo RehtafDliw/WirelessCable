@@ -1,0 +1,255 @@
+<Window x:Class="WirelessCable.Desktop.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="WirelessCable"
+        Height="820"
+        Width="1160"
+        MinHeight="640"
+        MinWidth="940"
+        WindowStartupLocation="CenterScreen"
+        Background="{DynamicResource SurfaceBrush}"
+        FontFamily="{StaticResource UiFont}"
+        UseLayoutRounding="True"
+        TextOptions.TextFormattingMode="Display">
+
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="212" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <!--
+            左侧导航：常驻，取代"回首页再点磁贴"的两跳。
+            配色刻意用半透明白而不是主题色：侧栏两套主题下都是深色，
+            用主题色会在浅色主题里显得脏。
+        -->
+        <Border Grid.Column="0"
+                Background="{DynamicResource HeaderBrush}"
+                BorderBrush="{DynamicResource LineBrush}"
+                BorderThickness="0,0,1,0">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="18,22,18,20">
+                    <Image Source="/assets/WirelessCable.ico"
+                           Width="26"
+                           Height="26"
+                           VerticalAlignment="Center"
+                           RenderOptions.BitmapScalingMode="HighQuality" />
+                    <StackPanel Margin="10,0,0,0" VerticalAlignment="Center">
+                        <TextBlock Text="WirelessCable"
+                                   Foreground="White"
+                                   FontSize="15"
+                                   FontWeight="SemiBold" />
+                        <TextBlock Text="无线数据线"
+                                   Foreground="{DynamicResource HeaderSubtleBrush}"
+                                   FontSize="11"
+                                   Margin="0,2,0,0" />
+                    </StackPanel>
+                </StackPanel>
+
+                <ItemsControl Grid.Row="1" ItemsSource="{Binding NavItems}" Margin="0,6,0,0">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Button Style="{StaticResource NavButton}"
+                                    Command="{Binding DataContext.NavigateCommand,
+                                                      RelativeSource={RelativeSource AncestorType=Window}}"
+                                    CommandParameter="{Binding Key}">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock FontFamily="{StaticResource IconFont}"
+                                               Text="{Binding Glyph}"
+                                               FontSize="15"
+                                               Width="24"
+                                               VerticalAlignment="Center" />
+                                    <TextBlock Text="{Binding Label}"
+                                               FontSize="13.5"
+                                               VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Button>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <!-- 服务状态常驻：用户不需要为了确认"手机能不能连"而回首页 -->
+                <StackPanel Grid.Row="2" Margin="18,0,18,18">
+                    <Border Style="{StaticResource HeaderPill}" HorizontalAlignment="Left">
+                        <TextBlock Text="{Binding ServiceStatusText}" Style="{StaticResource HeaderPillText}" />
+                    </Border>
+
+                    <TextBlock Text="{Binding EndpointText}"
+                               Foreground="{DynamicResource HeaderSubtleBrush}"
+                               FontSize="11.5"
+                               Margin="2,8,0,0"
+                               TextTrimming="CharacterEllipsis" />
+                    <TextBlock Foreground="{DynamicResource HeaderSubtleBrush}"
+                               FontSize="11"
+                               Margin="2,2,0,0">
+                        <Run Text="v" />
+                        <Run Text="{Binding AppVersionText, Mode=OneWay}" />
+                    </TextBlock>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- 右侧：固定标题条 + 可滚动内容 -->
+        <Grid Grid.Column="1">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <Border Grid.Row="0"
+                    Padding="28,16,28,14"
+                    BorderBrush="{DynamicResource LineBrush}"
+                    BorderThickness="0,0,0,1">
+                <Grid>
+                    <TextBlock Text="{Binding PageTitle}"
+                               Style="{StaticResource PageTitle}"
+                               VerticalAlignment="Center" />
+
+                    <Border HorizontalAlignment="Right" Style="{StaticResource Pill}">
+                        <TextBlock Text="{Binding DeviceSummary}" Style="{StaticResource PillText}" />
+                    </Border>
+                </Grid>
+            </Border>
+
+            <ScrollViewer Grid.Row="1"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          Padding="28,16,28,24">
+                <Grid MaxWidth="1020">
+                    <ContentControl x:Name="PageHost" Content="{Binding CurrentPage}" />
+                </Grid>
+            </ScrollViewer>
+        </Grid>
+
+        <!-- 首次使用引导：只出现一次，把"下一步做什么"讲清楚 -->
+        <Grid Grid.RowSpan="2" Grid.ColumnSpan="2" Background="{DynamicResource OverlayBrush}">
+            <Grid.Style>
+                <Style TargetType="Grid">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsIntroVisible}" Value="True">
+                            <Setter Property="Visibility" Value="Visible" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Grid.Style>
+
+            <Border Background="{DynamicResource CardBrush}"
+                    CornerRadius="12"
+                    Padding="26,22"
+                    Width="440"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center">
+                <StackPanel>
+                    <TextBlock Text="连接第一台设备" Style="{StaticResource PageTitle}" />
+                    <TextBlock Text="手机装好 APK，与电脑连同一个 Wi-Fi。"
+                               Style="{StaticResource MutedText}"
+                               Margin="0,6,0,16" />
+
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                        <Border Width="22" Height="22" CornerRadius="11" Background="{DynamicResource AccentSoftBrush}">
+                            <TextBlock Text="1" FontSize="12" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource AccentBrush}" />
+                        </Border>
+                        <TextBlock Text="电脑这侧已经就绪，绿色「服务运行中」表示手机能连。"
+                                   Style="{StaticResource BodyText}" Width="356" Margin="10,0,0,0" VerticalAlignment="Center" />
+                    </StackPanel>
+
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                        <Border Width="22" Height="22" CornerRadius="11" Background="{DynamicResource AccentSoftBrush}">
+                            <TextBlock Text="2" FontSize="12" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource AccentBrush}" />
+                        </Border>
+                        <TextBlock Text="在手机上打开 WirelessCable，扫描到这台电脑后点「配对」。"
+                                   Style="{StaticResource BodyText}" Width="356" Margin="10,0,0,0" VerticalAlignment="Center" />
+                    </StackPanel>
+
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,18">
+                        <Border Width="22" Height="22" CornerRadius="11" Background="{DynamicResource AccentSoftBrush}">
+                            <TextBlock Text="3" FontSize="12" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource AccentBrush}" />
+                        </Border>
+                        <TextBlock Text="电脑弹出配对请求时点「允许」，两端显示同一个校验码。"
+                                   Style="{StaticResource BodyText}" Width="356" Margin="10,0,0,0" VerticalAlignment="Center" />
+                    </StackPanel>
+
+                    <Button Style="{StaticResource PrimaryButton}"
+                            Content="开始使用"
+                            HorizontalAlignment="Right"
+                            Command="{Binding DismissIntroCommand}" />
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!--
+            配对确认弹窗：配对改成"一端发起、另一端确认"后，请求会主动挡在用户面前。
+            以前只有首页卡片，窗口在后台时用户根本注意不到，配对就一直悬着。
+        -->
+        <Grid Grid.RowSpan="2" Grid.ColumnSpan="2" Background="#8C101820">
+            <Grid.Style>
+                <Style TargetType="Grid">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsPairingPromptVisible}" Value="True">
+                            <Setter Property="Visibility" Value="Visible" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Grid.Style>
+
+            <Border Background="{DynamicResource CardBrush}"
+                    CornerRadius="10"
+                    Padding="24,20"
+                    Width="420"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    DataContext="{Binding PairingPrompt}">
+                <StackPanel>
+                    <TextBlock Text="配对请求" Style="{StaticResource MutedText}" />
+                    <TextBlock Text="{Binding DeviceName}"
+                               FontSize="18"
+                               FontWeight="SemiBold"
+                               Margin="0,6,0,0" />
+                    <TextBlock Text="{Binding PlatformText}" Style="{StaticResource MutedText}" Margin="0,3,0,0" />
+
+                    <TextBlock Text="校验码" Style="{StaticResource MutedText}" Margin="0,16,0,0" />
+                    <TextBlock Text="{Binding Code}"
+                               FontFamily="Consolas"
+                               FontSize="40"
+                               FontWeight="Bold"
+                               Margin="0,2,0,0" />
+
+                    <TextBlock Text="{Binding DataContext.PairingPromptExtra,
+                                              RelativeSource={RelativeSource AncestorType=Window}}"
+                               Style="{StaticResource MutedText}"
+                               Margin="0,4,0,0" />
+
+                    <StackPanel Orientation="Horizontal" Margin="0,18,0,0">
+                        <Button Style="{StaticResource PrimaryButton}"
+                                Content="允许"
+                                Margin="0,0,8,0"
+                                Command="{Binding DataContext.ApprovePairingCommand,
+                                                  RelativeSource={RelativeSource AncestorType=Window}}"
+                                CommandParameter="{Binding RequestId}" />
+                        <Button Style="{StaticResource GhostButton}"
+                                Content="拒绝"
+                                Margin="0,0,8,0"
+                                Command="{Binding DataContext.RejectPairingCommand,
+                                                  RelativeSource={RelativeSource AncestorType=Window}}"
+                                CommandParameter="{Binding RequestId}" />
+                        <Button Style="{StaticResource GhostButton}"
+                                Content="稍后"
+                                Command="{Binding DataContext.DismissPairingPromptCommand,
+                                                  RelativeSource={RelativeSource AncestorType=Window}}" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Grid>
+    </Grid>
+</Window>

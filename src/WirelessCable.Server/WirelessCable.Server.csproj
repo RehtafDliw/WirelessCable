@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <RootNamespace>WirelessCable.Server</RootNamespace>
+    <AssemblyName>WirelessCable.Server</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="QRCoder" Version="1.6.0" />
+    <PackageReference Include="Serilog.AspNetCore" Version="9.0.0" />
+  </ItemGroup>
+
+  <!--
+    新版界面产物（webui/dist）。
+
+    打成嵌入资源而不是 wwwroot 目录：交付仍然是单文件 exe。
+    LogicalName 统一加 webui/ 前缀，LocalUiStatic 按这个前缀切出请求路径。
+    webui 还没构建时这项匹配为空，服务端会退回 /app 的 404，不影响旧界面。
+  -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\WirelessCable.Desktop\webui\dist\**\*"
+                      LogicalName="webui/%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\WirelessCable.Core\WirelessCable.Core.csproj" />
+    <ProjectReference Include="..\WirelessCable.Protocol\WirelessCable.Protocol.csproj" />
+    <ProjectReference Include="..\WirelessCable.Storage\WirelessCable.Storage.csproj" />
+    <ProjectReference Include="..\WirelessCable.Infrastructure\WirelessCable.Infrastructure.csproj" />
+  </ItemGroup>
+
+</Project>

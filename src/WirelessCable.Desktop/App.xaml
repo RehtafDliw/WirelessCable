@@ -1,0 +1,41 @@
+<Application x:Class="WirelessCable.Desktop.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:WirelessCable.Desktop.ViewModels"
+             xmlns:views="clr-namespace:WirelessCable.Desktop.Views"
+             ShutdownMode="OnExplicitShutdown">
+    <Application.Resources>
+        <ResourceDictionary>
+            <!--
+                索引 0 = 样式（不变），索引 1 = 画刷（浅/深）。
+                ThemeService 只替换索引 1，所以样式里的颜色必须写 DynamicResource。
+            -->
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Themes/Base.xaml" />
+                <ResourceDictionary Source="Themes/Light.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+
+            <DataTemplate DataType="{x:Type vm:HomeViewModel}">
+                <views:HomeView />
+            </DataTemplate>
+            <DataTemplate DataType="{x:Type vm:DevicesViewModel}">
+                <views:DevicesView />
+            </DataTemplate>
+            <DataTemplate DataType="{x:Type vm:TransfersViewModel}">
+                <views:TransfersView />
+            </DataTemplate>
+            <DataTemplate DataType="{x:Type vm:SettingsViewModel}">
+                <views:SettingsView />
+            </DataTemplate>
+            <DataTemplate DataType="{x:Type vm:MyComputerViewModel}">
+                <views:MyComputerView />
+            </DataTemplate>
+            <DataTemplate DataType="{x:Type vm:SharedDirectoriesViewModel}">
+                <views:SharedDirectoriesView />
+            </DataTemplate>
+            <DataTemplate DataType="{x:Type vm:PhoneFilesViewModel}">
+                <views:PhoneFilesView />
+            </DataTemplate>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

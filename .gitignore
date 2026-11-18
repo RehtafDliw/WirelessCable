@@ -1,0 +1,90 @@
+# ---------------------------------------------------------------- 构建产物
+bin/
+obj/
+/dist/
+WirelessCable-Release/
+android/app/build/
+android/build/
+android/.gradle/
+android/.kotlin/
+android/local.properties
+*.log
+.gradle/
+*.apk
+*.exe
+*.msi
+*.zip
+
+# ---------------------------------------------------------------- 依赖与生成物
+node_modules/
+src/WirelessCable.Desktop/webui/dist/
+
+# ---------------------------------------------------------------- 工具链（本地 SDK，不进仓库）
+toolchain/
+
+# ---------------------------------------------------------------- 签名与密钥（绝不提交）
+keys/
+keystore.properties
+*.jks
+*.keystore
+*.pfx
+*.p12
+
+# ---------------------------------------------------------------- 运行时数据（只针对根目录/便携包，别写成通配）
+/Data/
+/Logs/
+/TransferTemp/
+/settings.json
+*.db
+*.db-shm
+*.db-wal
+
+# ---------------------------------------------------------------- 第三方参考仓库（GPL-3.0，仅本地）
+oink-main/
+
+# ---------------------------------------------------------------- 内部文档（只在本地，不进仓库）
+# 工作日志、验收记录、评审、计划、工程清单。文件本身不删，只是不跟踪。
+/MASTER.md
+/PROJECT_STATUS.md
+/docs/changelog.md
+/docs/known-issues.md
+/docs/acceptance-*.md
+/docs/review-*.md
+/docs/notes-*.md
+/docs/delivery-report.md
+/docs/development-plan.md
+/docs/clipboard-plan.md
+/docs/architecture.md
+/docs/ui/*-plan.md
+
+# ---------------------------------------------------------------- 技术文档与设计素材（只在本地）
+# docs/ 只公开两本手册 + README 用的截图；下面这些留在本地。
+/docs/protocol.md
+/docs/database.md
+/docs/security.md
+/docs/testing.md
+/docs/ui-spec.md
+/docs/android-compatibility.md
+/docs/direct-transport-options.md
+/docs/release.md
+/docs/pairing-vector.json
+/docs/技术栈与开源依赖.md
+/docs/release/
+/docs/ui/
+
+# ---------------------------------------------------------------- UI 自动化脚本（仅本地验证用）
+/tools/
+
+# ---------------------------------------------------------------- 本地临时
+tmp/
+.testtmp/
+.workbuddy/
+
+# ---------------------------------------------------------------- IDE / 系统
+.vs/
+.idea/
+.vscode/
+*.user
+*.suo
+Thumbs.db
+.DS_Store

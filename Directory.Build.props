@@ -1,0 +1,24 @@
+<Project>
+
+  <PropertyGroup>
+    <!--
+      版本号唯一来源。发布时只改这里（Android 侧对应 app/build.gradle.kts 的
+      versionName / versionCode，两边要一起改）。
+      build-desktop.sh 也从这里读版本，产物文件名跟着走。
+    -->
+    <Version>2.9.0</Version>
+
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Deterministic>true</Deterministic>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- 单文件发布时避免 xml/pdb 污染输出 -->
+    <AllowedReferenceRelatedFileExtensions>none</AllowedReferenceRelatedFileExtensions>
+    <!-- CA1416: 本项目为 Windows 专用（WPF/Kestrel 桌面托管），不做跨平台可用性告警 -->
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+  </PropertyGroup>
+
+</Project>

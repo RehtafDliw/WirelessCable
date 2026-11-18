@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- 收件目录与用户收到的文件都在外部存储里，按整棵外部存储共享读权限 -->
+    <external-path name="external" path="." />
+</paths>

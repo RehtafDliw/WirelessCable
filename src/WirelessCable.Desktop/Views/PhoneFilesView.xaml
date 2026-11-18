@@ -1,0 +1,279 @@
+<UserControl x:Class="WirelessCable.Desktop.Views.PhoneFilesView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             FontFamily="{StaticResource UiFont}">
+    <StackPanel>
+
+        <!-- 手机授权的根 -->
+        <Border Style="{StaticResource Card}" Padding="12">
+            <StackPanel>
+                <ItemsControl x:Name="RootsList" ItemsSource="{Binding Shell.PhoneFiles.Roots}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <!--
+                                点击必须落在这个 Button 上，不能落在 RadioButton 上：
+                                RadioButton 的 Command 在「同组内已是选中态」时不会重复执行，
+                                结果就是两个授权目录点来点去内容不变。
+                                RadioButton 退化为纯视觉元素（不接收鼠标、不可聚焦），
+                                选中态仍由 IsSelected 双向绑定驱动。
+                            -->
+                            <Button Command="{Binding DataContext.Shell.PhoneFiles.SelectRootCommand,
+                                                      RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                    CommandParameter="{Binding RootId}"
+                                    HorizontalContentAlignment="Stretch"
+                                    Background="Transparent"
+                                    BorderThickness="0"
+                                    Padding="2,5"
+                                    Cursor="Hand">
+                                <RadioButton GroupName="PhoneRoot"
+                                             IsHitTestVisible="False"
+                                             Focusable="False"
+                                             IsChecked="{Binding IsSelected, Mode=TwoWay}">
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding DisplayName}" FontSize="14" />
+                                        <TextBlock Style="{StaticResource MutedText}" FontSize="12" Margin="0,2,0,0">
+                                            <Run Text="{Binding DeviceName, Mode=OneWay}" />
+                                            <Run Text=" · " />
+                                            <Run Text="{Binding CapabilitiesText, Mode=OneWay}" />
+                                        </TextBlock>
+                                    </StackPanel>
+                                </RadioButton>
+                            </Button>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+        </Border>
+
+        <!-- 路径与操作 -->
+        <Grid Margin="0,14,0,8">
+            <StackPanel Orientation="Horizontal">
+                <Button Style="{StaticResource GhostButton}"
+                        Content="← 返回上级"
+                        ToolTip="回到上一级目录（鼠标侧键「后退」也可以）"
+                        Command="{Binding Shell.PhoneFiles.GoUpCommand}" />
+                <TextBlock Text="{Binding Shell.PhoneFiles.PathDisplay}"
+                           Style="{StaticResource MutedText}"
+                           VerticalAlignment="Center"
+                           Margin="12,0,0,0" />
+            </StackPanel>
+
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button Style="{StaticResource GhostButton}"
+                        Content="发送到手机"
+                        IsEnabled="{Binding Shell.PhoneFiles.CanSendToPhone}"
+                        Command="{Binding Shell.PhoneFiles.SendToPhoneCommand}" />
+                <Button Style="{StaticResource GhostButton}"
+                        Content="新建文件夹"
+                        Margin="8,0,0,0"
+                        IsEnabled="{Binding Shell.PhoneFiles.CanCreateFolder}"
+                        Command="{Binding Shell.PhoneFiles.CreateFolderCommand}" />
+                <Button Style="{StaticResource GhostButton}"
+                        Content="刷新"
+                        Margin="8,0,0,0"
+                        Command="{Binding Shell.PhoneFiles.RefreshCommand}" />
+                <TextBlock Text="{Binding Shell.PhoneFiles.CheckedText}"
+                           Style="{StaticResource MutedText}"
+                           VerticalAlignment="Center"
+                           Margin="12,0,8,0" />
+                <Button Style="{StaticResource DangerLink}"
+                        Content="删除选中"
+                        VerticalAlignment="Center"
+                        IsEnabled="{Binding Shell.PhoneFiles.HasChecked}"
+                        Command="{Binding Shell.PhoneFiles.DeleteSelectedCommand}" />
+            </StackPanel>
+        </Grid>
+
+        <!-- 排序、搜索与翻页：目录动辄几千项，一条长列表既难找也卡 -->
+        <Grid Margin="0,0,0,8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                <Button Style="{StaticResource GhostButton}"
+                        Content="{Binding Shell.PhoneFiles.NameSortText}"
+                        Command="{Binding Shell.PhoneFiles.SortCommand}"
+                        CommandParameter="name" />
+                <Button Style="{StaticResource GhostButton}"
+                        Content="{Binding Shell.PhoneFiles.SizeSortText}"
+                        Margin="8,0,0,0"
+                        Command="{Binding Shell.PhoneFiles.SortCommand}"
+                        CommandParameter="size" />
+                <Button Style="{StaticResource GhostButton}"
+                        Content="{Binding Shell.PhoneFiles.TimeSortText}"
+                        Margin="8,0,0,0"
+                        Command="{Binding Shell.PhoneFiles.SortCommand}"
+                        CommandParameter="time" />
+
+                <Grid Width="190" Margin="16,0,0,0" VerticalAlignment="Center">
+                    <TextBox x:Name="SearchBox"
+                             Style="{StaticResource InputBox}"
+                             Padding="9,4"
+                             FontSize="12.5"
+                             VerticalContentAlignment="Center"
+                             Text="{Binding Shell.PhoneFiles.SearchKeyword, UpdateSourceTrigger=PropertyChanged}" />
+                    <!-- 占位提示：只在输入框为空时出现，不占布局 -->
+                    <TextBlock Text="搜索名称"
+                               Margin="11,0,0,0"
+                               VerticalAlignment="Center"
+                               IsHitTestVisible="False"
+                               FontSize="12.5"
+                               Foreground="{DynamicResource MutedBrush}">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Text, ElementName=SearchBox}" Value="">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </Grid>
+            </StackPanel>
+
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                <StackPanel.Style>
+                    <Style TargetType="StackPanel">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding Shell.PhoneFiles.HasPages}" Value="True">
+                                <Setter Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </StackPanel.Style>
+                <Button Style="{StaticResource GhostButton}"
+                        Content="上一页"
+                        Command="{Binding Shell.PhoneFiles.PrevPageCommand}" />
+                <TextBlock Text="{Binding Shell.PhoneFiles.PageText}"
+                           Style="{StaticResource MutedText}"
+                           VerticalAlignment="Center"
+                           Margin="10,0,10,0" />
+                <Button Style="{StaticResource GhostButton}"
+                        Content="下一页"
+                        Command="{Binding Shell.PhoneFiles.NextPageCommand}" />
+            </StackPanel>
+        </Grid>
+
+        <!-- 条目：单行表格。操作全部收进右键菜单，行内不再摆按钮 -->
+        <Border Style="{StaticResource Card}" Padding="10">
+            <StackPanel>
+                <Grid Margin="8,2,8,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="26" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="72" />
+                        <ColumnDefinition Width="80" />
+                        <ColumnDefinition Width="104" />
+                    </Grid.ColumnDefinitions>
+                    <!-- 表头就是全选框：勾上=这一页全选，取消=全不选 -->
+                    <CheckBox Grid.Column="0" MinWidth="0"
+                              VerticalAlignment="Center"
+                              ToolTip="全选当前页"
+                              IsChecked="{Binding Shell.PhoneFiles.AllChecked, Mode=TwoWay}" />
+                    <TextBlock Grid.Column="1" Text="名称" Style="{StaticResource ListHeaderText}" />
+                    <TextBlock Grid.Column="2" Text="类型" Style="{StaticResource ListHeaderText}" />
+                    <TextBlock Grid.Column="3" Text="大小" Style="{StaticResource ListHeaderText}" />
+                    <TextBlock Grid.Column="4" Text="修改时间" Style="{StaticResource ListHeaderText}" />
+                </Grid>
+
+                <ItemsControl x:Name="EntriesList" ItemsSource="{Binding VisibleEntries}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <!-- 双击进目录 / 文件先保存到电脑；右键出菜单（与资源管理器一致） -->
+                            <Border Style="{StaticResource DenseRow}"
+                                    MouseLeftButtonDown="OnRowMouseLeftButtonDown">
+                                <Border.ContextMenu>
+                                    <ContextMenu>
+                                        <MenuItem Header="{Binding PrimaryActionText}"
+                                                  IsEnabled="{Binding CanRunPrimaryAction}"
+                                                  Click="OnMenuPrimaryClick" />
+                                        <Separator />
+                                        <MenuItem Header="重命名…"
+                                                  IsEnabled="{Binding CanRename}"
+                                                  Click="OnMenuRenameClick" />
+                                        <MenuItem Header="删除"
+                                                  IsEnabled="{Binding CanDelete}"
+                                                  Click="OnMenuDeleteClick" />
+                                        <Separator />
+                                        <MenuItem Header="属性" Click="OnMenuPropertiesClick" />
+                                    </ContextMenu>
+                                </Border.ContextMenu>
+
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="26" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="72" />
+                                        <ColumnDefinition Width="80" />
+                                        <ColumnDefinition Width="104" />
+                                    </Grid.ColumnDefinitions>
+
+                                    <CheckBox Grid.Column="0" MinWidth="0"
+                                              VerticalAlignment="Center"
+                                              IsChecked="{Binding IsChecked, Mode=TwoWay}" />
+
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                        <TextBlock FontFamily="{StaticResource IconFont}"
+                                                   FontSize="13"
+                                                   Foreground="{DynamicResource AccentBrush}"
+                                                   VerticalAlignment="Center"
+                                                   Margin="0,0,7,0">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Text" Value="&#xE8A5;" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsDirectory}" Value="True">
+                                                            <Setter Property="Text" Value="&#xE8B7;" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                        <TextBlock Text="{Binding Name}"
+                                                   FontSize="13"
+                                                   VerticalAlignment="Center"
+                                                   TextTrimming="CharacterEllipsis" />
+                                    </StackPanel>
+
+                                    <TextBlock Grid.Column="2" Text="{Binding TypeText}"
+                                               Style="{StaticResource MutedText}" VerticalAlignment="Center" />
+                                    <TextBlock Grid.Column="3" Text="{Binding SizeText}"
+                                               Style="{StaticResource MutedText}" VerticalAlignment="Center" />
+                                    <TextBlock Grid.Column="4" Text="{Binding ModifiedText}"
+                                               Style="{StaticResource MutedText}" VerticalAlignment="Center" />
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+        </Border>
+
+        <!-- 作业结果：下发 → 执行 → 完成/失败都在这里说，用户不用靠反复刷新去猜 -->
+        <TextBlock Text="{Binding Shell.PhoneFiles.StatusText}"
+                   FontSize="12.5"
+                   TextWrapping="Wrap"
+                   Margin="2,10,2,0">
+            <TextBlock.Style>
+                <Style TargetType="TextBlock">
+                    <Setter Property="Foreground" Value="{DynamicResource MutedBrush}" />
+                    <Setter Property="Visibility" Value="Visible" />
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding Shell.PhoneFiles.HasStatus}" Value="False">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding Shell.PhoneFiles.StatusIsError}" Value="True">
+                            <Setter Property="Foreground" Value="{DynamicResource ErrorBrush}" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </TextBlock.Style>
+        </TextBlock>
+
+    </StackPanel>
+</UserControl>

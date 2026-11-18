@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <RootNamespace>WirelessCable.Core</RootNamespace>
+    <AssemblyName>WirelessCable.Core</AssemblyName>
+  </PropertyGroup>
+
+</Project>

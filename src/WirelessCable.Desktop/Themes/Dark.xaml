@@ -1,0 +1,40 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!--
+        深色主题画刷。与 Light.xaml 键名一一对应，只有色值不同。
+        原则：卡片比背景亮、描边比卡片亮一档；正文接近纯白但不刺眼；
+        强调色、成功、错误各提亮一档，保证在深底上对比度足够（≥ 4.5:1）。
+    -->
+
+    <SolidColorBrush x:Key="HeaderBrush" Color="#171C24" />
+    <SolidColorBrush x:Key="HeaderSubtleBrush" Color="#9AA3AF" />
+    <SolidColorBrush x:Key="SurfaceBrush" Color="#12161C" />
+    <SolidColorBrush x:Key="CardBrush" Color="#1B212A" />
+    <SolidColorBrush x:Key="CardHoverBrush" Color="#232A33" />
+    <SolidColorBrush x:Key="TileBrush" Color="#232B36" />
+    <SolidColorBrush x:Key="TileHoverBrush" Color="#2B3441" />
+    <SolidColorBrush x:Key="TilePressedBrush" Color="#323D4B" />
+    <SolidColorBrush x:Key="LineBrush" Color="#2A313B" />
+    <SolidColorBrush x:Key="TextBrush" Color="#E6E9EE" />
+    <SolidColorBrush x:Key="MutedBrush" Color="#9AA3AF" />
+    <SolidColorBrush x:Key="AccentBrush" Color="#4C9AEF" />
+    <SolidColorBrush x:Key="AccentHoverBrush" Color="#63A8F2" />
+    <SolidColorBrush x:Key="AccentSoftBrush" Color="#1B2C42" />
+    <SolidColorBrush x:Key="SuccessBrush" Color="#35C77C" />
+    <SolidColorBrush x:Key="SuccessPillBrush" Color="#14351F" />
+    <SolidColorBrush x:Key="ProgressBrush" Color="#37B98A" />
+    <SolidColorBrush x:Key="ErrorBrush" Color="#F0615A" />
+    <SolidColorBrush x:Key="ErrorPillBrush" Color="#3A1A18" />
+    <SolidColorBrush x:Key="IdlePillBrush" Color="#262D36" />
+    <SolidColorBrush x:Key="HeaderPillBrush" Color="#1C3F39" />
+    <SolidColorBrush x:Key="HeaderPillTextBrush" Color="#6FD3A8" />
+    <SolidColorBrush x:Key="WipChipBrush" Color="#3A3320" />
+    <SolidColorBrush x:Key="WipTextBrush" Color="#E0C168" />
+    <SolidColorBrush x:Key="InputBrush" Color="#232A33" />
+    <SolidColorBrush x:Key="OverlayBrush" Color="#B30A0D12" />
+    <SolidColorBrush x:Key="TrackBrush" Color="#262D36" />
+    <SolidColorBrush x:Key="MenuBrush" Color="#1B212A" />
+    <SolidColorBrush x:Key="MenuHoverBrush" Color="#232A33" />
+
+</ResourceDictionary>

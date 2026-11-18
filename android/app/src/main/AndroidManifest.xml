@@ -1,0 +1,165 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+        "所有文件访问权"：用户可选开启，开启后电脑可读写整台手机
+        （Android/data 与 Android/obb 仍被系统屏蔽）。
+        这是特殊权限，只能在系统设置里由用户手动授予，应用内无法直接申请。
+        手选目录（SAF）仍然保留，粒度更细，两条路并存。
+    -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+
+    <!-- 用于引导用户把应用设为"不受电池限制"；不申请也能跳详情页 -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- 没有它就无法接收 mDNS 入站组播（Wi-Fi 省电会过滤组播），NSD 会永远发现不到设备 -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!--
+        startLocalOnlyHotspot（出码方开热点）与 WifiNetworkSpecifier（扫码方连热点）
+        都需要它。缺了不会崩，只会抛出
+        "Neither user … nor current process has android.permission.CHANGE_WIFI_STATE"
+        —— 热点永远开不起来，而且看起来像是系统不支持（1.5.22 真机踩到）。
+    -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <!--
+        `ConnectivityManager.requestNetwork` 在部分 ROM（三星 One UI 实测）上还要
+        CHANGE_NETWORK_STATE 或 WRITE_SETTINGS 之一，否则直接抛：
+
+        requestNetwork 失败：SecurityException: com.wirelesscable.app was not granted
+        either of these permissions:android.permission.CHANGE_NETWORK_STATE,
+        android.permission.WRITE_SETTINGS.
+
+        WRITE_SETTINGS 是特殊权限（用户手动开），CHANGE_NETWORK_STATE 是普通权限、
+        装包即授予、不弹框。所以声明后者：它一在，热点才真的能被应用加入（1.5.63）。
+    -->
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <!-- 扫码配对。相机为可选硬件，无摄像头设备仍可用发现/手动两条路径 -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <!--
+        直连的「用热点直连」：出码方开临时热点（startLocalOnlyHotspot）、扫码方加入它
+        （WifiNetworkSpecifier）。系统对这两件事都要求定位权限，
+        但应用本身不采集、不推断任何位置信息。
+    -->
+    <!--
+        定位权限只声明到 Android 12（maxSdkVersion=32）。
+        Android 13 起 Wi-Fi 相关的运行时权限换成了「附近的设备」，两个同时声明会让
+        系统把应用当成"用定位"的那一类，部分 ROM 会因此要求定位总开关是打开的，
+        甚至直接走定位分支失败。旧原型一直只用 NEARBY，13+ 上从没出过这类问题（1.5.62）。
+    -->
+    <uses-permission
+        android:name="android.permission.ACCESS_FINE_LOCATION"
+        android:maxSdkVersion="32" />
+    <!--
+        Android 12 起用户可以只给"大致位置"（只授 COARSE、拒 FINE）。
+        声明它是为了能**分辨**这种情况并给出准确文案——热点/Wi-Fi 直连要的是精确位置。
+        13+ 不需要它，所以同样截止到 32。
+    -->
+    <uses-permission
+        android:name="android.permission.ACCESS_COARSE_LOCATION"
+        android:maxSdkVersion="32" />
+    <uses-permission
+        android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="33" />
+
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
+
+    <!--
+        传应用：
+        - QUERY_ALL_PACKAGES：Android 11 起包可见性默认只给"相关"应用，
+          没有它 `getInstalledPackages` 只能看到自己，"传预装应用"直接失效；
+        - REQUEST_INSTALL_PACKAGES：收到对方发来的安装包后提交安装会话。
+          真正装的时候系统还会要用户开"安装未知应用"，那是应用级开关，不是运行时权限。
+    -->
+    <uses-permission
+        android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- 反向文件服务：前台服务 + 传输期间按需的 Partial WakeLock -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <application
+        android:name=".WirelessCableApp"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="false"
+        android:theme="@style/Theme.WirelessCable">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.WirelessCable">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!--
+                系统分享：任何应用里的「分享」都能看到「无线数据线」。
+                单选走 SEND，多选走 SEND_MULTIPLE；类型收 */* —— 文件管理器
+                给的类型五花八门，限定成 image/* 之类会漏掉 PDF、压缩包。
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+        </activity>
+
+        <!-- 打开收件目录里的文件：Android 7+ 不允许直接暴露 file://，必须走 content:// -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+        <!-- 安装结果（成功/失败/需要用户确认）回到这里，界面据此给一行提示 -->
+        <receiver
+            android:name=".core.apps.InstallResultReceiver"
+            android:exported="false" />
+
+        <!--
+            「与电脑保持连接」：息屏/后台继续执行电脑下发的文件操作（K43）。
+
+            前台服务类型选 specialUse 而不是 dataSync：
+            - dataSync 在 Android 15 起有"每 24 小时最多 6 小时"的配额，
+              本项目是与已配对电脑之间的持续会话，不是一次性同步任务；
+            - connectedDevice 指 USB/蓝牙这类外部设备连接，网络对端不属于该定义；
+            - specialUse 需要在这里写清用途，上架 Google Play 时需一并申报。
+        -->
+        <service
+            android:name=".core.service.SessionSyncService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="paired_desktop_session: keep executing file operations requested by the paired desktop while the app is in background" />
+        </service>
+    </application>
+
+</manifest>

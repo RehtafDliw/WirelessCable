@@ -1,0 +1,76 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <!--
+      带 Windows SDK 版本（19041）才能用 WinRT：电脑热点靠
+      Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager 开关与配置。
+      不带版本的 net9.0-windows 没有这层投影。
+    -->
+    <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <UseWPF>true</UseWPF>
+    <!-- 托盘图标：WPF 没有内置 NotifyIcon，借用 WinForms 的那个；只用到 NotifyIcon/ContextMenu 少数字类型 -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <RootNamespace>WirelessCable.Desktop</RootNamespace>
+    <AssemblyName>WirelessCable</AssemblyName>
+    <ApplicationIcon>assets\WirelessCable.ico</ApplicationIcon>
+    <AssemblyTitle>WirelessCable</AssemblyTitle>
+    <Product>WirelessCable</Product>
+    <Description>WirelessCable</Description>
+
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 阶段 14.2：新版界面的宿主（WebView2 运行时随 Windows 10/11 分发，不额外安装） -->
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />
+  </ItemGroup>
+
+
+  <!--
+    新版界面产物随发布一起落到 wwwroot（便携文件夹里看得见、可单独替换）。
+
+    Server 那边同时也把同样的产物嵌进了程序集：单独拷 exe 也能打开 /app，
+    而目录里有 wwwroot 时优先读磁盘 —— 换界面不用重新编译。
+  -->
+  <ItemGroup>
+    <!-- 默认 None 项会把 .js/.css 先认领走，导致发布时只拷了 index.html -->
+    <None Remove="webui\dist\**\*" />
+    <Content Include="webui\dist\**\*"
+             Link="wwwroot\%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest"
+             ExcludeFromSingleFile="true" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      启用 WinForms 会顺手加上 System.Windows.Forms / System.Drawing 的隐式 using，
+      导致 UserControl、Application、Icon 全部歧义。这里移除，托盘代码里用别名显式引用。
+    -->
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="assets\WirelessCable.ico" />
+    <!-- 角标：只有图形、透明底。托盘图标和任务栏角标共用这一张 -->
+    <Resource Include="assets\WirelessCable.Badge.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\WirelessCable.Server\WirelessCable.Server.csproj" />
+    <ProjectReference Include="..\WirelessCable.Infrastructure\WirelessCable.Infrastructure.csproj" />
+    <ProjectReference Include="..\WirelessCable.Protocol\WirelessCable.Protocol.csproj" />
+    <ProjectReference Include="..\WirelessCable.Core\WirelessCable.Core.csproj" />
+    <ProjectReference Include="..\WirelessCable.Storage\WirelessCable.Storage.csproj" />
+  </ItemGroup>
+
+</Project>
