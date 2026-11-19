@@ -100,9 +100,12 @@ cmd_check() {
 
 retry_push() {
     local attempt=1 delay=5
+    # 走 HTTPS 代理时 Windows 的 schannel 后端常报 "server closed abruptly
+    # (missing close_notify)" 或代理侧 502；换 OpenSSL 后端即通（实测）。
+    local tls=(-c http.sslBackend=openssl)
     while [ "$attempt" -le "$RETRIES" ]; do
         say "推送（第 $attempt/$RETRIES 次）"
-        if git push "$REMOTE" main && git push "$REMOTE" --tags; then
+        if git "${tls[@]}" push "$REMOTE" main && git "${tls[@]}" push "$REMOTE" --tags; then
             ok "main 与标签已推送"
             return 0
         fi

@@ -31,6 +31,19 @@ What it does **not** do: no internet relay, no account, no browser extension, an
 
 ---
 
+## On the phone
+
+<img src="docs/screenshots/phone-home.png" width="300" alt="Phone home screen">
+
+Four tabs: **Home** (paired PCs, connection state, send files / scan to pair / direct transfer),
+**Files** (folders shared from the PC plus the phone's inbox), **Transfers** (progress and history,
+pausable), **Settings** (background sync, grants, appearance and language).
+
+The link is **bidirectional**: the PC can also browse folders the phone has shared, with four permission
+tiers set per folder.
+
+---
+
 ## Quick start
 
 **PC**: unzip, run `WirelessCable.exe`. On first launch it asks to open the local port — click "Continue",
@@ -150,7 +163,7 @@ scripts/                         build, test, package
 
 ## Known limitations
 
-- Windows + Android only, **no iOS version** (not planned).
+- Windows and Android only.
 - Same LAN required: guest networks and AP isolation block it (mDNS multicast does not cross them).
 - The phone does not listen on any port, so the PC cannot initiate a connection to it.
 - The server allows at most **3 concurrent tasks per device**; manual sends from the phone are queued one by one.
