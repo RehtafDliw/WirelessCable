@@ -163,6 +163,23 @@ public sealed class DeviceRepository
             await grants.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
+        // 文件索引快照同样没人要了。不删的话每台解绑过的手机都会在库里留下
+        // 几千条 DeviceFileEntries（实测两台历史设备残留 7400+ 行），既占体积，
+        // 也会让「按设备统计」之类的查询数出已经不存在的东西。
+        await using (var entries = connection.CreateCommand())
+        {
+            entries.CommandText = "DELETE FROM DeviceFileEntries WHERE root_id LIKE $prefix;";
+            entries.Parameters.AddWithValue("$prefix", deviceId + "/%");
+            await entries.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await using (var roots = connection.CreateCommand())
+        {
+            roots.CommandText = "DELETE FROM DeviceFileRoots WHERE device_id = $id;";
+            roots.Parameters.AddWithValue("$id", deviceId);
+            await roots.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         await using var command = connection.CreateCommand();
         command.CommandText = "DELETE FROM Devices WHERE device_id = $id;";
         command.Parameters.AddWithValue("$id", deviceId);

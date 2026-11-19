@@ -169,7 +169,13 @@ fun FileBrowserScreen(
                     .padding(top = 40.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(Str.t("空目录"), color = WcColors.Muted, fontSize = 13.sp)
+                // 读失败和"真的空"是两件事：以前一律写「空目录」，
+                // 电脑没开时用户会以为文件丢了
+                Text(
+                    Str.t(if (state.warning != null) "内容未加载" else "空目录"),
+                    color = WcColors.Muted,
+                    fontSize = 13.sp,
+                )
             }
         } else {
             LazyColumn(

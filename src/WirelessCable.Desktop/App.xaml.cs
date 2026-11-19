@@ -212,6 +212,20 @@ public partial class App : Application
             Log.Warning(ex, "清理无主传输记录失败");
         }
 
+        // 同理：老版本解绑设备不删文件索引快照，库里会留几千条孤儿条目。
+        try
+        {
+            var orphanEntries = await new DeviceFileRepository(database).PruneOrphanRootsAsync();
+            if (orphanEntries > 0)
+            {
+                Log.Information("已清理无主文件索引 {Count} 条", orphanEntries);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "清理无主文件索引失败");
+        }
+
         EnsureFirewall();
 
         if (_server.Snapshot().State == ServiceState.Failed)

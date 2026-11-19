@@ -190,8 +190,42 @@ public sealed class DeviceFileRepository
         return stale.Count;
     }
 
-    // ------------------------------------------------------------ 条目
+    /// <summary>
+    /// 清掉"设备已经不在了"的索引根与条目。
+    ///
+    /// 2.10.0 之前解绑设备只删授权、不删索引，库里会留下再也用不到的根：
+    /// 实测两台历史手机残留 7400+ 行 DeviceFileEntries，既占体积，也会让
+    /// 任何按设备统计的查询数出已经不存在的东西。启动时跑一次，两条 DELETE 的事。
+    /// </summary>
+    /// <returns>删掉的根数量。</returns>
+    public async Task<int> PruneOrphanRootsAsync(CancellationToken cancellationToken = default)
+    {
+        await using var connection = _factory.Open();
+        await using var transaction = connection.BeginTransaction();
 
+        // 顺序不能反：先把"设备已不存在"的根删掉，再按剩余根清理条目。
+        await using (var staleRoots = connection.CreateCommand())
+        {
+            staleRoots.Transaction = transaction;
+            staleRoots.CommandText =
+                "DELETE FROM DeviceFileRoots WHERE device_id NOT IN (SELECT device_id FROM Devices);";
+            await staleRoots.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        int orphanEntries;
+        await using (var entries = connection.CreateCommand())
+        {
+            entries.Transaction = transaction;
+            entries.CommandText =
+                "DELETE FROM DeviceFileEntries WHERE root_id NOT IN (SELECT root_id FROM DeviceFileRoots);";
+            orphanEntries = await entries.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return orphanEntries;
+    }
+
+    // ------------------------------------------------------------ 条目
     /// <summary>整批替换某个根的条目快照。上行索引是一次性覆盖语义，避免残留已删除的条目。</summary>
     public async Task ReplaceEntriesAsync(
         string deviceId,

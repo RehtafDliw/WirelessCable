@@ -148,7 +148,7 @@ scripts/                         build, test, package
 | [`docs/en/guide.md`](docs/en/guide.md) | End-user guide (English): install, pair, transfer, FAQ |
 | [`docs/使用指南.md`](docs/使用指南.md) | Same guide in Chinese |
 | [`docs/用户手册.md`](docs/用户手册.md) | Chinese manual with implementation details (troubleshooting) |
-| [`ARCHITECTURE.md`](ARCHITECTURE.md) | Layers and key decisions |
+| [`ARCHITECTURE.en.md`](ARCHITECTURE.en.md) | Layers and key decisions (中文: [ARCHITECTURE.md](ARCHITECTURE.md)) |
 
 ---
 

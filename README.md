@@ -142,7 +142,7 @@ scripts/                        构建、测试、打包
 | [`docs/使用指南.md`](docs/使用指南.md) | 终端用户手册：装、连、传、常见问题 |
 | [`docs/用户手册.md`](docs/用户手册.md) | 含实现细节的手册（排障用） |
 | [`docs/en/guide.md`](docs/en/guide.md) | 同一份使用指南的英文版 |
-| [`ARCHITECTURE.md`](ARCHITECTURE.md) | 分层与关键决策 |
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | 分层与关键决策（[English](ARCHITECTURE.en.md)） |
 
 ---
 

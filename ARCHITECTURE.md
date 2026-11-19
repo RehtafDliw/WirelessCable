@@ -1,7 +1,9 @@
 # ARCHITECTURE.md — 架构与关键决策
 
-> 对应版本 **2.9.0**（2026-11-18）。本文描述代码**现在**的样子；与代码不一致时以代码为准。
+> 对应版本 **2.10.1**（2026-11-19）。本文描述代码**现在**的样子；与代码不一致时以代码为准。
 > 只写能在仓库里指到文件的实现，纯设计不进本文。
+>
+> English: [ARCHITECTURE.en.md](ARCHITECTURE.en.md)
 
 ---
 
@@ -40,8 +42,8 @@ Android（客户端）
 | `WirelessCable.Storage` | SQLite 实体、仓储、手写迁移 |
 | `WirelessCable.Infrastructure` | 证书、mDNS、文件提供器、路径守卫、Serilog、防火墙 |
 | `WirelessCable.Server` | Kestrel 宿主、端点、认证与限流中间件、传输引擎、文件服务 |
-| `WirelessCable.Desktop` | WPF 宿主 + WebView2 + 内嵌 React；托盘、热点、原生对话框 |
-| `android/app` | Kotlin / Compose 单模块：`core/{network,pairing,crypto,transfer,sync,files,direct}` |
+| `WirelessCable.Desktop` | WPF 宿主 + WebView2 + 内嵌 React；托盘、热点、原生对话框；原生壳文案走 `Services/Loc.cs` |
+| `android/app` | Kotlin / Compose 单模块：`core/{network,pairing,crypto,transfer,sync,files,direct,i18n}` |
 
 依赖只能向下：`Desktop → Server → Storage → Protocol → Core`；`Infrastructure` 由 `Server` / `Desktop` 引用。
 `Core` 不引用 ASP.NET Core、Windows API、SQLite。桌面专属能力（热点、文件对话框）通过**桥**注入 Server，方向不反。
@@ -87,8 +89,14 @@ Android（客户端）
 ## 6. 存储
 
 `Data/wirelesscable.db`（便携版）或 `%LOCALAPPDATA%\WirelessCable\data\`（单文件版），WAL 模式。
-表：`Devices`、`TransferTasks`、`TransferChunks`、`SharedDirectories`、`FileJobs`、`PairingRequests` 等，schema **v14**，手写迁移。
+表：`Devices`、`TransferTasks`、`TransferChunks`、`SharedDirectories`、`SharedDirectoryGrants`、
+`DeviceFileRoots`、`DeviceFileEntries`、`FileOperationJobs`、`PairingRecords`，schema **v14**，手写迁移。
 Android 用 Room；`SessionSyncEngine` 是唯一执行者（心跳 10 秒 + 索引 12 秒 + 作业长轮询）。
+
+删设备是**级联**的：`DeviceRepository.DeleteAsync` 一并清掉该设备的共享授权与文件索引快照
+（`DeviceFileEntries` 按 `root_id` 前缀、`DeviceFileRoots` 按 `device_id`）。启动时
+`DeviceFileRepository.PruneOrphanRootsAsync` 再收一次尾——2.10.0 之前只删授权不删索引，
+历史库里会留下上万条没有主人的条目。
 
 ---
 
@@ -97,6 +105,11 @@ Android 用 Room；`SessionSyncEngine` 是唯一执行者（心跳 10 秒 + 索�
 - `minSdk 30`（Android 11）/ `targetSdk 35`。`MANAGE_EXTERNAL_STORAGE` 用于收件目录；`POST_NOTIFICATIONS`、`CAMERA`（扫码）、`CHANGE_WIFI_MULTICAST_STATE`（NSD）。
 - 前台服务用 `foregroundServiceType="specialUse"`（这个值只在 API 34+ 合法），持有 `PARTIAL_WAKE_LOCK` 与低延迟 Wi-Fi 锁。
 - 文件访问：SAF 持久化目录授权 + 整机根；`SafFileProvider` 把能力位翻译成 8 个动作。
+- **手机自己的根由本地直读**：`FileBrowserViewModel.reload()` 先查 `localRoots`，命中就调
+  `FileProviders.forRoot(context, root).list(path)`，不再绕道电脑的 `/files/{root}/entries`。
+  电脑离线时也能浏览自己的文件；条目经 `FileEntry.toDto()` 转成与网络层同构的 DTO，UI 无分支。
+- 界面语言：`core/i18n/Str.kt`（中文原文当 key + 正则规则 + 回退中文）与 `LangState`
+  （`ui.lang` = system/zh/en，Compose 可观察状态）。切换即时重组，不重建 Activity。
 - 电池白名单只影响"多久被系统冻结"，代码不作承诺；息屏能否继续取决于 ROM。
 
 ---
@@ -140,6 +153,10 @@ Android 用 Room；`SessionSyncEngine` 是唯一执行者（心跳 10 秒 + 索�
 | D-033 | 电脑浏览手机沿用「索引快照 + list 作业」，不新增反向拉取通道 | 手机不监听入站端口（1.3.0 退役反向服务），电脑要看手机只能读手机推上来的索引；深目录超出索引深度时下发一次性 `list` 作业，手机执行完把结果写回作业。新界面只是把这套能力包成 `/app/api/files/*`，没有第二条数据通路，也没有把手机变成服务端 | 已定（2026-11-17） |
 | D-034 | 手机文件的复制由**手机执行**，不走「下载回电脑再传上去」的中转 | 中转会把流量翻倍、还要在电脑临时落盘；SAF 没有通用 `copyDocument`，用既有原语（递归建目录 + 流拷贝）在手机内完成，电脑只下发一个 `copy` 作业。失败时删掉半成品，不留半个目录 | 已定（2026-11-17） |
 | D-035 | 手机间传输保留「一端监听 + 客户端」模型，短期热点优先、AP 兜底；Wi-Fi Direct 列为中期独立通道，不复活 1.3.0 的反向服务 | 「手机做监听」不是瓶颈（手机-手机直连本来就是出码方监听 47130）；瓶颈是两台手机之间的链路——同一个 AP 的客户端互访实测 RTT 110–630 ms、重传 2.38%，热点与 P2P 才是绕开它的办法，电脑中转则把一条烂链路换成两条好链路。沿用现有 HTTPS/证书/令牌模型，避免重写安全层 | 已定（2026-11-17） |
+| D-036 | 界面双语用**中文原文当 key**（`Str.t("确定")` / `t('确定')`），键值表 + 正则规则，查不到回退中文 | 一千多条文案起英文 key 必然错位：改中文忘改 key、key 与界面脱节。原文当 key 时字典能与源码逐字比对（脚本可扫），漏翻只会露出中文，不会显示 key。代价是 key 必须与源码字面量逐字一致——踩过 `'个任务'` 配 `t(' 个任务')` 少一个前导空格的坑 | 已定（2.10.0） |
+| D-037 | 设备对外名统一为 `机器名 · 短ID`（deviceId 前 4 位） | 两台电脑同名时手机列表与分享弹窗无法区分，而 deviceId 本来就唯一、只是没广播出去。加四位短 ID 不改协议也不改配对流程；旧配对记录由客户端 `deviceLabel()` 补后缀 | 已定（2.10.0） |
+| D-038 | 手机自己的根**本地直读**，不经过电脑的 `/files/{root}/entries` | 手机浏览自己的内部存储却要求电脑在线：电脑一关就显示「空目录」，用户以为文件丢了。`FileProvider.list` 本来就在手机进程里，加一个分支即可，顺带省一次网络往返。电脑浏览手机仍走「索引快照 + list 作业」，两条路互不影响 | 已定（2.10.1） |
+| D-039 | 解绑设备**级联删除**文件索引快照，启动时再清一次孤儿 | 索引是快照语义，设备没了它就永远是死数据；旧逻辑只删授权，实测两台历史手机留下 7400+ 行。放在 `DeviceRepository.DeleteAsync` 里做，新旧两个删除入口（`/app/api/devices/{id}` 与 WPF 旧界面）自动覆盖 | 已定（2.10.1） |
 
 ---
 

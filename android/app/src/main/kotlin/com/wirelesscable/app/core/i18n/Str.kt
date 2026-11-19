@@ -440,6 +440,7 @@ object Str {
         "移除设备" to "Remove device",
         "稍后" to "Later",
         "空目录" to "Empty folder",
+        "内容未加载" to "Not loaded",
         "立即上报目录" to "Publish folders now",
         "立即重连" to "Reconnect now",
         "端口" to "Port",
