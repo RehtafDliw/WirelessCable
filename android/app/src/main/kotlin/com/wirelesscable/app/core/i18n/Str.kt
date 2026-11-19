@@ -183,6 +183,8 @@ object Str {
         "已开启" to "On",
         "已关闭" to "Off",
         "已发送" to "Sent",
+        "接收" to "Received",
+        "发送" to "Sent",
         "已发送给对方" to "Sent to the other phone",
         "已下载" to "Downloaded",
         "已接入" to "Connected",

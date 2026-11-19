@@ -146,18 +146,16 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 关闭行为：设置里勾了"收进托盘"就只隐藏窗口——服务与传输继续跑。
-    /// 想真正退出用托盘菜单的「退出程序」。
+    /// 关闭行为：**只隐藏窗口**，服务与传输继续跑；真正退出只走托盘菜单的「退出程序」。
+    ///
+    /// 这个窗口是兜底界面（主界面是 WebView2 那个），以前这里跟着
+    /// <c>settings.CloseToTray</c> 走、默认 false，结果点叉号等于
+    /// <c>Application.Shutdown()</c>——后台服务、进行中的传输一起没了。
+    /// 用户反馈"双击托盘开的是旧页面，而且关不掉，点叉号直接退出程序"，就是这么来的。
     /// </summary>
     private void OnClosing(object? sender, CancelEventArgs e)
     {
         if (AllowClose)
-        {
-            return;
-        }
-
-        var settings = DesktopSettingsStore.Load();
-        if (!settings.CloseToTray)
         {
             return;
         }

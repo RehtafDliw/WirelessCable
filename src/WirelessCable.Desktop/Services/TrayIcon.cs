@@ -79,7 +79,14 @@ public sealed class TrayIcon : IDisposable
             };
 
             _icon.MouseUp += OnMouseUp;
-            _icon.DoubleClick += (_, _) => ShowWindow();
+            // 双击直接开新版界面；WebView2 起不来（运行时缺失/端口没起来）才退回旧窗口
+            _icon.DoubleClick += (_, _) =>
+            {
+                if (!_viewModel.OpenNewUiWindow())
+                {
+                    ShowWindow();
+                }
+            };
 
             _viewModel.PropertyChanged += OnViewModelChanged;
         }

@@ -113,6 +113,12 @@ export type TransferDto = {
   state: string;
   errorMessage: string | null;
   localPath: string | null;
+  /**
+   * 落点相对路径（'/' 分隔）。整文件夹下载时形如 `相册/1.jpg`，
+   * 界面据此把同一目录的几百条任务收成一行——这些任务没有 batchId
+   * （它们是逐条作业创建的，服务端只对批量接口写批次）。
+   */
+  relativePath?: string;
   /** 整文件夹传输的分组键：同一批里的任务共用一个值（单文件任务为空）。 */
   batchId?: string | null;
   /** 批次对应的文件夹名（收成一行时显示这个）。 */

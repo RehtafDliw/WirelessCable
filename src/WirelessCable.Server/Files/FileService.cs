@@ -716,7 +716,10 @@ public sealed class FileService
         }
 
         var results = new List<FileJobDto>();
-        foreach (var job in pending)
+        // 只取一小批：一次把几百个下载作业全标成 running，排在后面的会在手机开始执行前
+        // 就耗掉 300 秒的上报窗口（实测 330 张图有 136 个 job_timeout）。
+        // 手机执行完立刻再来取，空转代价只有一次长轮询。
+        foreach (var job in pending.Take(ProtocolConstants.MaxJobsPerPoll))
         {
             await _deviceFiles
                 .UpdateJobStatusAsync(job.JobId, FileJobStatuses.Running, null, null, cancellationToken)

@@ -61,6 +61,16 @@ public static class ProtocolConstants
     /// </summary>
     public const int JobReportTimeoutSeconds = 300;
 
+    /// <summary>
+    /// 一次最多下发给手机的作业数。
+    ///
+    /// 下载整个文件夹会一次入队几百个下载作业；全发下去的话手机只能逐个执行，
+    /// 排在后面的会一直等到 <see cref="JobReportTimeoutSeconds"/> 被判定超时
+    /// （实测 330 张图：完成 194 个，其余 136 个 job_timeout）。
+    /// 改成小批取、取完再取下一批，每个作业"取走→回报"的间隔就很短。
+    /// </summary>
+    public const int MaxJobsPerPoll = 8;
+
     /// <summary>分块内容的 SHA-256 请求/响应头（上传必带，下载必回）。</summary>
     public const string ChunkSha256Header = "X-WC-Chunk-Sha256";
 

@@ -64,6 +64,11 @@ data class TransferItem(
     val savedToPhone: Boolean = false,
     /** 整文件夹传输的分组键；单文件任务为空。 */
     val batchId: String? = null,
+    /**
+     * 落点相对路径（'/' 分隔）。整文件夹下载时形如 `相册/1.jpg`，
+     * 界面据此把同一目录的几百条任务收成一行——这些任务逐条创建，没有 batchId。
+     */
+    val relativePath: String = "",
     /** 批次文件夹名。 */
     val batchName: String? = null,
 ) {
@@ -1118,6 +1123,7 @@ class TransferEngine(
         savedToPhone = state == TransferStates.COMPLETED,
         batchId = batchId,
         batchName = batchName,
+        relativePath = relativePath,
     )
 
     /** 记录已在服务端删除：立刻从本地列表里拿掉，不等下一轮刷新。 */

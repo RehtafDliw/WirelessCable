@@ -88,7 +88,12 @@ public static class TransferEndpoints
             return;
         }
 
-        var tasks = await engine.ListAsync(device, 50, cancellationToken).ConfigureAwait(false);
+        // 整文件夹下载会一次产生几百条任务，客户端要能把它们取全才能收成一行。
+        // 以前这里写死 50：桌面端传 ?limit=1000 被忽略，一个 330 文件的批次只能看到 50 条。
+        var requested = context.Request.Query["limit"].ToString();
+        var limit = int.TryParse(requested, out var parsed) ? Math.Clamp(parsed, 1, 1000) : 50;
+
+        var tasks = await engine.ListAsync(device, limit, cancellationToken).ConfigureAwait(false);
         await ApiResponseWriter.WriteSuccessAsync(context, tasks, cancellationToken).ConfigureAwait(false);
     }
 

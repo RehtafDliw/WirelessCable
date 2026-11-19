@@ -135,11 +135,18 @@ export function isInFlight(state: string): boolean {
   return IN_FLIGHT.has(state);
 }
 
+/**
+ * 方向标签，用**本端视角**的「接收 / 发送」。
+ *
+ * 以前写「手机 → 本机」「本机 → 手机」：电脑上的"本机"是电脑、手机上的"本机"是手机，
+ * 同一个词指两个东西，同一条传输在两端读起来正好相反。文件列表里设备名已经在前一列，
+ * 这里只需要说清方向。
+ */
 export function directionLabel(direction: string): string {
-  return direction === 'upload' ? t('手机 → 本机') : t('本机 → 手机');
+  return direction === 'upload' ? t('接收') : t('发送');
 }
 
-/** 上传是手机发来的（我收到的），下载是本机发出去的（我发送的）。 */
+/** 上传是手机发来的（本机接收），下载是本机发给手机的（本机发送）。 */
 export function isSent(direction: string): boolean {
   return direction === 'download';
 }

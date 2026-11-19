@@ -80,7 +80,8 @@ Sharing a web link works too: it is saved as a small text file and sent.
 Open **Phone files** on the PC to browse folders the phone has shared; double-click to save.
 
 First time, grant access on the phone: **Files** → pick the folder to expose.
-If that feels tedious, turn on **Whole-device access** instead — the PC can then see every file.
+If that feels tedious, turn on **Whole-device access** instead — the PC can then see almost every file.
+The only exceptions are other apps' `Android/data` and `Android/obb`, which Android blocks for every app.
 
 **Permissions can be changed at any time**, per folder:
 

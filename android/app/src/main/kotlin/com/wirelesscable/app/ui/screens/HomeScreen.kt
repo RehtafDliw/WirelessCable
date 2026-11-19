@@ -473,17 +473,26 @@ private fun TransferSummaryCard(
     }
 }
 
-/** 单条的第二行：方向 · 速度。 */
+/** 单条的第二行：设备名 · 方向 · 速度。 */
 private fun TransferItem.directionLine(): String =
-    (if (isUpload) Str.t("本机 → $deviceName") else Str.t("$deviceName → 本机")) +
-        " · " + TransferFormat.speed(bytesPerSecond)
+    listOfNotNull(
+        deviceName.takeIf { it.isNotBlank() },
+        // 用本端视角的「接收/发送」：以前两端都写"本机"，指的是各自的自己，同一条传输读起来正好相反
+        Str.t(if (isUpload) "发送" else "接收"),
+        TransferFormat.speed(bytesPerSecond),
+    ).joinToString(" · ")
 
-/** 整批的第二行：方向 · 已完成几个 · 速度。 */
+/** 整批的第二行：设备名 · 方向 · 已完成几个 · 速度。 */
 private fun TransferRow.Batch.homeSubtitle(): String {
-    val direction = if (isUpload) Str.t("本机 → ${lead.deviceName}") else Str.t("${lead.deviceName} → 本机")
-    val progressText = Str.t("$completedCount/$fileCount 个文件")
-    val speed = if (isActive && !allPaused) TransferFormat.speed(bytesPerSecond) else null
-    return (listOf(direction, progressText) + listOfNotNull(speed)).joinToString(" · ")
+    val parts = buildList {
+        lead.deviceName.takeIf { it.isNotBlank() }?.let(::add)
+        add(Str.t(if (isUpload) "发送" else "接收"))
+        add(Str.t("$completedCount/$fileCount 个文件"))
+        if (isActive && !allPaused) {
+            add(TransferFormat.speed(bytesPerSecond))
+        }
+    }
+    return parts.joinToString(" · ")
 }
 
 // ---------------------------------------------------------------- 动作按钮

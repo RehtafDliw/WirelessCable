@@ -13,9 +13,6 @@ import androidx.lifecycle.viewModelScope
 import com.wirelesscable.app.core.files.AllFilesAccess
 import com.wirelesscable.app.core.files.AllFilesProvider
 import com.wirelesscable.app.core.files.FileCapabilities
-import com.wirelesscable.app.core.files.FileEntry
-import com.wirelesscable.app.core.files.FileProviders
-import com.wirelesscable.app.core.files.FileResult
 import com.wirelesscable.app.core.files.FileRoot
 import com.wirelesscable.app.core.files.RootGrantManager
 import com.wirelesscable.app.core.network.ApiOutcome
@@ -217,7 +214,6 @@ class FileBrowserViewModel(
                 val current = ensureApi()
                 if (current == null) {
                     _state.update { it.copy(ready = false) }
-                    showLocalRootsIfEmpty()
                     delay(SESSION_RETRY_MS)
                     continue
                 }
@@ -859,38 +855,6 @@ class FileBrowserViewModel(
             val path = _state.value.currentPath
             if (rootId.isEmpty()) return@launch
 
-            // 手机自己的根（整机 / 手选目录）直读本地。
-            //
-            // 以前一律走电脑的 /files/{root}/entries：电脑没开就只有「空目录」，
-            // 用户会以为文件没了。手机看自己的文件不该依赖另一端是否在线。
-            val localRoot = _state.value.localRoots.firstOrNull { it.rootId == rootId }?.root
-            if (localRoot != null) {
-                val listing = runCatching { FileProviders.forRoot(context, localRoot).list(path) }
-                _state.update { current ->
-                    when {
-                        listing.isFailure -> current.copy(
-                            entries = emptyList(),
-                            warning = listing.exceptionOrNull()?.message?.takeIf { it.isNotBlank() }
-                                ?: "读取失败",
-                        )
-
-                        else -> when (val result = listing.getOrThrow()) {
-                            is FileResult.Success -> current.copy(
-                                ready = true,
-                                entries = result.value.orEmpty().map { it.toDto() },
-                                warning = null,
-                            )
-
-                            is FileResult.Failure -> current.copy(
-                                entries = emptyList(),
-                                warning = result.message,
-                            )
-                        }
-                    }
-                }
-                return@launch
-            }
-
             val api = ensureApi() ?: return@launch
 
             when (val outcome = api.list(tokenOf(), rootId, path)) {
@@ -966,65 +930,16 @@ class FileBrowserViewModel(
         }
     }
 
-    /** 本地根的 DTO 形态：电脑离线时列表就靠它们。 */
-    private fun localRootDtos(): List<FileRootDto> =
-        _state.value.localRoots.map { local ->
-            FileRootDto(
-                rootId = local.rootId,
-                kind = FileProtocol.KIND_DEVICE,
-                displayName = local.displayName,
-                capabilities = local.root?.capabilities ?: FileCapabilities.ALL,
-            )
-        }
-
-    /**
-     * 服务端下发的根 + 手机自己的根。
-     *
-     * 本地根不该依赖电脑是否在线：以前只认服务端列表，电脑一关连
-     * 「Internal storage」这个入口都消失，用户根本点不进来。
-     */
-    private fun mergeLocalRoots(serverRoots: List<FileRootDto>): List<FileRootDto> {
-        val locals = localRootDtos()
-        if (locals.isEmpty()) {
-            return serverRoots
-        }
-
-        val known = serverRoots.map { it.rootId }.toSet()
-        return serverRoots + locals.filter { it.rootId !in known }
-    }
-
-    /** 一个根都拿不到时，至少把手机自己的根摆出来并选中第一个。 */
-    private fun showLocalRootsIfEmpty() {
-        val current = _state.value
-        if (current.roots.isNotEmpty()) {
-            return
-        }
-
-        val locals = localRootDtos()
-        if (locals.isEmpty()) {
-            return
-        }
-
-        val rootId = current.currentRootId.ifEmpty { locals.first().rootId }
-        _state.update {
-            it.copy(
-                roots = locals,
-                currentRootId = rootId,
-                readOnly = isReadOnly(locals, rootId),
-            )
-        }
-
-        if (_state.value.entries.isEmpty()) {
-            reload()
-        }
-    }
-
     private suspend fun refreshRoots(api: FileApi) {
         when (val outcome = api.roots(tokenOf())) {
             is ApiOutcome.Success -> {
                 consecutiveFailures = 0
-                // 本地根始终参与列表，电脑关着也能进来
-                val roots = mergeLocalRoots(outcome.value)
+                // 只列电脑侧：整机根 + 电脑授权给手机的共享目录。
+                // 手机自己的目录交给系统文件管理器——App 里再放一份既用不上，
+                // 又容易和「电脑上的手机文件」混成一团。
+                val roots = outcome.value.filter {
+                    it.kind == FileProtocol.KIND_MACHINE || it.kind == FileProtocol.KIND_SHARED
+                }
                 _state.update { current ->
                     val stillAllowed = roots.any { it.rootId == current.currentRootId }
                     val rootId = if (stillAllowed) {
@@ -1060,8 +975,6 @@ class FileBrowserViewModel(
                 // 不足以判定连接断开。以前一失败就把整页标成"无法连接到电脑"，
                 // 而传输走的是另一条请求路径，于是出现"提示断线但文件照传"。
                 consecutiveFailures++
-                // 连不上电脑不等于"什么都没有"：手机自己的根照常可以浏览
-                showLocalRootsIfEmpty()
                 if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
                     _state.update { it.copy(ready = false, message = outcome.message) }
                 }
@@ -1103,18 +1016,3 @@ enum class FileSortBy {
     /** 按扩展名（类型）。 */
     TYPE,
 }
-
-/**
- * 本地 provider 的条目 → 网络层 DTO。
- *
- * 两边字段一一对应、路径语义相同（相对根，'/' 分隔，根为空串），
- * 转换只是为了让 LazyColumn 和选择逻辑复用同一套 UI 代码。
- */
-private fun FileEntry.toDto(): FileEntryDto = FileEntryDto(
-    name = name,
-    relativePath = relativePath,
-    isDirectory = isDirectory,
-    sizeBytes = sizeBytes,
-    modifiedUnixMs = modifiedUnixMs,
-    capabilities = capabilities,
-)

@@ -205,7 +205,9 @@ class TransferApi private constructor(
 
     suspend fun tasks(token: String): ApiOutcome<List<TransferTask>> =
         withContext(Dispatchers.IO) {
-            executeJson(buildRequest(TransferPaths.TASKS, token).get().build())
+            // 取够一个"整文件夹下载"批次：330 个文件要能被完整收成一行，
+            // 默认 50 条会让同一个文件夹被切成好几行、数字也对不上
+            executeJson(buildRequest("${TransferPaths.TASKS}?limit=1000", token).get().build())
         }
 
     /**

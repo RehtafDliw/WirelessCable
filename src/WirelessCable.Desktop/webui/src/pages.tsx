@@ -1015,36 +1015,52 @@ type RowGroup = {
  * 这里只做合并，不重新排序（否则行会随着进度回报来回跳）。
  */
 function groupTasks(rows: TransferDto[]): RowGroup[] {
+  // 优先用服务端给的 batchId；没有批次的按**落点目录的第一段**兜底分组。
+  //
+  // 整文件夹下载走的是逐条 `/files/jobs`，服务端不会给这些任务写 batchId，
+  // 于是一次 330 张图就在列表里铺 330 行。单文件下载的 relativePath 没有 '/'，
+  // 不会被误并进某个批次。
+  const keyOf = (row: TransferDto): string | null => {
+    if (row.batchId) {
+      return row.batchId;
+    }
+
+    const slash = (row.relativePath ?? '').indexOf('/');
+    return slash > 0 ? `dir:${row.relativePath!.slice(0, slash)}` : null;
+  };
+
   const byBatch = new Map<string, TransferDto[]>();
   rows.forEach((row) => {
-    if (!row.batchId) {
+    const key = keyOf(row);
+    if (!key) {
       return;
     }
 
-    const list = byBatch.get(row.batchId) ?? [];
+    const list = byBatch.get(key) ?? [];
     list.push(row);
-    byBatch.set(row.batchId, list);
+    byBatch.set(key, list);
   });
 
   const emitted = new Set<string>();
   const groups: RowGroup[] = [];
 
   rows.forEach((row) => {
-    if (!row.batchId) {
+    const key = keyOf(row);
+    if (!key) {
       groups.push({ key: row.taskId, batchId: null, name: row.fileName, items: [row] });
       return;
     }
 
-    if (emitted.has(row.batchId)) {
+    if (emitted.has(key)) {
       return;
     }
 
-    emitted.add(row.batchId);
+    emitted.add(key);
     groups.push({
-      key: `batch:${row.batchId}`,
-      batchId: row.batchId,
-      name: row.batchName || t('文件夹'),
-      items: byBatch.get(row.batchId) ?? [row],
+      key: `batch:${key}`,
+      batchId: key,
+      name: row.batchName || key.replace(/^dir:/, ''),
+      items: byBatch.get(key) ?? [row],
     });
   });
 
@@ -1052,7 +1068,9 @@ function groupTasks(rows: TransferDto[]): RowGroup[] {
 }
 
 export function TransfersPage() {
-  const transfers = useApi<TransferDto[]>('/transfers?limit=100', 1500);
+  // 取够一批"整文件夹下载"：330 个文件的批次要能被完整分组，
+  // 只取 100 条会让同一文件夹被切成好几行
+  const transfers = useApi<TransferDto[]>('/transfers?limit=1000', 1500);
   const [tab, setTab] = useState<'active' | 'done'>('active');
   const [filter, setFilter] = useState<Filter>('all');
   const [selected, setSelected] = useState<string[]>([]);

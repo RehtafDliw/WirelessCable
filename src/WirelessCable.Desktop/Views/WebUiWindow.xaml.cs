@@ -118,12 +118,12 @@ public partial class WebUiWindow : Window
     }
 
     /// <summary>
-    /// 关闭语义，与旧窗口保持一致：
-    /// <list type="bullet">
-    /// <item>设置里勾了「收进托盘」→ 只隐藏，服务与传输继续跑；</item>
-    /// <item>否则真正退出。新版界面是默认入口，关掉它就该结束进程；</item>
-    /// <item>如果用户同时开着旧界面（回退），关掉新的不牵连旧的。</item>
-    /// </list>
+    /// 关闭语义：**叉号只收起窗口**，服务与传输继续跑；退出统一走托盘菜单的「退出程序」。
+    ///
+    /// 以前这里跟着 `CloseToTray` 走（默认 false），点叉号等于 `Application.Shutdown()`，
+    /// 正在传的文件、后台服务一起没了。这是个托盘应用，叉号不该是退出键。
+    /// 真正退出由 <see cref="Services.TrayIcon"/> 的「退出程序」触发：它会先把
+    /// Dispatcher 标记为正在关闭，这里直接放行。
     /// </summary>
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
     {
@@ -133,21 +133,8 @@ public partial class WebUiWindow : Window
             return;
         }
 
-        var oldWindowVisible = Application.Current?.MainWindow?.IsVisible == true;
-
-        if (!oldWindowVisible && WirelessCable.Desktop.Services.DesktopSettingsStore.Load().CloseToTray)
-        {
-            e.Cancel = true;
-            Hide();
-            return;
-        }
-
-        base.OnClosing(e);
-
-        if (!oldWindowVisible)
-        {
-            Application.Current?.Shutdown();
-        }
+        e.Cancel = true;
+        Hide();
     }
 
     // ---------------------------------------------------------------- 安全边界

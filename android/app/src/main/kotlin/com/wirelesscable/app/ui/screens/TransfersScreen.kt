@@ -615,8 +615,10 @@ private fun TransferBatchRow(
  * 几个文件速度不均时这个数会跳得很厉害，宁可不显示。
  */
 private fun TransferRow.Batch.metaLine(inboxBlocked: Boolean): String {
-    val direction = if (isUpload) Str.t("本机 → ${lead.deviceName}") else Str.t("${lead.deviceName} → 本机")
-    val parts = mutableListOf(direction)
+    val parts = mutableListOf<String>()
+    // 用本端视角的「接收/发送」：以前两端都写"本机"，指的是各自的自己，同一条传输读起来正好相反
+    lead.deviceName.takeIf { it.isNotBlank() }?.let(parts::add)
+    parts += Str.t(if (isUpload) "发送" else "接收")
     parts += if (completedCount == fileCount) {
         Str.t("$fileCount 个文件")
     } else {
@@ -643,7 +645,10 @@ private fun TransferRow.Batch.metaLine(inboxBlocked: Boolean): String {
  * 否则用户看到的永远是「接收中…」，会以为卡死。
  */
 private fun TransferItem.metaLine(inboxBlocked: Boolean): String {
-    val direction = if (isUpload) Str.t("本机 → $deviceName") else Str.t("$deviceName → 本机")
+    val direction = buildList {
+        deviceName.takeIf { it.isNotBlank() }?.let(::add)
+        add(Str.t(if (isUpload) "发送" else "接收"))
+    }.joinToString(" · ")
 
     if (needsSave) {
         when (state) {

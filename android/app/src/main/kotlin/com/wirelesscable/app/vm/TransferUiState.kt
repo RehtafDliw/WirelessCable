@@ -94,29 +94,35 @@ data class TransferUiState(
     val activeRows: List<TransferRow>
         get() = rowsOf(items.filter { it.state != TransferStates.COMPLETED })
 
-    /** 按 `batchId` 把任务收成行；顺序按"第一次出现"，不重排（重排会随进度跳）。 */
+    /** 按 `batchId` 把任务收成行；没有批次的按落点目录兜底，顺序按"第一次出现"。 */
     private fun rowsOf(source: List<TransferItem>): List<TransferRow> {
+        // 整文件夹下载走的是逐条作业，服务端不会给这些任务写 batchId，
+        // 于是 330 张图铺成 330 行。用落点目录的第一段兜底分组；
+        // 单文件下载的 relativePath 就是文件名（没有 '/'），不会被误并进去。
+        fun keyOf(item: TransferItem): String? {
+            item.batchId?.takeIf { it.isNotBlank() }?.let { return it }
+            val slash = item.relativePath.indexOf('/')
+            return if (slash > 0) "dir:" + item.relativePath.substring(0, slash) else null
+        }
+
         val grouped = LinkedHashMap<String, MutableList<TransferItem>>()
         source.forEach { item ->
-            val batchId = item.batchId
-            if (!batchId.isNullOrBlank()) {
-                grouped.getOrPut(batchId) { mutableListOf() }.add(item)
-            }
+            keyOf(item)?.let { key -> grouped.getOrPut(key) { mutableListOf() }.add(item) }
         }
 
         val emitted = HashSet<String>()
         val result = mutableListOf<TransferRow>()
         source.forEach { item ->
-            val batchId = item.batchId
-            if (batchId.isNullOrBlank()) {
+            val key = keyOf(item)
+            if (key == null) {
                 result += TransferRow.Single(item)
                 return@forEach
             }
 
             // 整批按"第一次出现"的位置插进列表，和逐条时的顺序保持一致
-            if (!emitted.add(batchId)) return@forEach
-            val entries = grouped[batchId].orEmpty()
-            result += TransferRow.Batch(batchId, item.batchName ?: "文件夹", entries)
+            if (!emitted.add(key)) return@forEach
+            val entries = grouped[key].orEmpty()
+            result += TransferRow.Batch(key, item.batchName ?: key.removePrefix("dir:"), entries)
         }
 
         // 只把"进行中"提到前面；同组内保持服务端顺序（排序是稳定的）。
