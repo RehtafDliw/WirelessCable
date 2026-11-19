@@ -540,11 +540,16 @@ public sealed class TransferRepository
             """
             SELECT * FROM TransferTasks
             WHERE device_id = $device
-            ORDER BY updated_at_utc DESC
+            ORDER BY
+                CASE WHEN status IN ('completed', 'failed', 'cancelled') THEN 1 ELSE 0 END,
+                updated_at_utc DESC
             LIMIT $limit;
             """;
         command.Parameters.AddWithValue("$device", deviceId);
-        command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 200));
+        // 上限要与两端的 /transfers 一致（1000）：整夹下载一次几百条，
+        // 卡在 200 会让同目录分组看到的条目数少于实际。
+        // 排序同样让未结束的优先，否则排队中的条目会被已完成的历史挤出去。
+        command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 1000));
 
         var items = new List<TransferTaskRecord>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -566,10 +571,16 @@ public sealed class TransferRepository
         command.CommandText =
             """
             SELECT * FROM TransferTasks
-            ORDER BY updated_at_utc DESC
+            ORDER BY
+                CASE WHEN status IN ('completed', 'failed', 'cancelled') THEN 1 ELSE 0 END,
+                updated_at_utc DESC
             LIMIT $limit;
             """;
-        command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 300));
+        // 未结束的（等传输 / 传输中 / 校验 / 暂停 / 中断）永远排在前面。
+        // 只按 updated_at 排会有个致命边界：历史任务攒到几千条后，
+        // 一个 330 文件的批次里"还在排队"的那些（updated_at 停在创建时刻）
+        // 会被挤出前 N 条，界面上就只剩半批，进度永远对不上。
+        command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 1000));
 
         var items = new List<TransferTaskRecord>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);

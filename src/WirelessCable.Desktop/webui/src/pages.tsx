@@ -1266,8 +1266,10 @@ export function TransfersPage() {
         <div style={{ display: 'flex', gap: 6 }}>
           {(
             [
-              ['active', t(`传输中 ${activeGroups.length}`)],
-              ['done', t(`已完成 ${doneGroups.length}`)],
+              // 数字用**文件条数**，不是分组行数：一整个文件夹只在列表里占一行，
+              // 但用户关心的是"传了多少个文件"，显示组数会让人以为只有几个。
+              ['active', t(`传输中 ${active.length}`)],
+              ['done', t(`已完成 ${done.length}`)],
             ] as const
           ).map(([key, label]) => (
             <button

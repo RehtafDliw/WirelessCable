@@ -289,8 +289,10 @@ public static class LocalUiEndpoints
             var names = (await devices.ListAsync(cancellationToken).ConfigureAwait(false))
                 .ToDictionary(d => d.DeviceId, d => d.DisplayName, StringComparer.Ordinal);
 
+            // 上限必须与手机端 /transfers 一致（1000），否则前端按目录分组的批次会被拦腰截断：
+            // 一次 330 个文件的整夹下载，200 条只能看到前 200 个，行上显示的"已完成 N/M"就永远对不上。
             var items = await transfers
-                .ListRecentAsync(Math.Clamp(limit ?? 100, 1, 200), names, cancellationToken)
+                .ListRecentAsync(Math.Clamp(limit ?? 100, 1, 1000), names, cancellationToken)
                 .ConfigureAwait(false);
 
             return Results.Json(items.Select(dto => new
@@ -305,6 +307,10 @@ public static class LocalUiEndpoints
                 state = dto.State,
                 errorMessage = dto.ErrorMessage,
                 localPath = dto.LocalPath,
+                // 落点相对路径：整文件夹下载时它是判断"这些任务属于哪个目录"的唯一依据
+                // （服务端不给 batchId，前端只能按路径第一段兜底分组）。
+                // 少了它，194 个文件就会在列表里铺 194 行。
+                relativePath = dto.RelativePath,
                 // 整文件夹传输的批次：界面据此把 N 个任务收成一行
                 batchId = dto.BatchId,
                 batchName = dto.BatchName,
