@@ -91,14 +91,17 @@ import com.wirelesscable.app.vm.PairingViewModel
 import com.wirelesscable.app.vm.DirectViewModel
 import com.wirelesscable.app.vm.InboxViewModel
 import com.wirelesscable.app.vm.TransferViewModel
+import com.wirelesscable.app.core.i18n.Str
 
 /**
  * 底部导航。
  *
  * 阶段 7 收敛成四页：首页（连接与发现）、文件（电脑/手机）、传输中心、设置。
  * 原来的「设备」「发送」两个标签并入首页与文件页——六个标签在手机上太挤，
- * 而且"设备"与"首页"讲的是同一件事。
+ * 而且设备与首页讲的是同一件事。
  */
+// 只存中文原文：枚举常量在类初始化时求值，写 Str.t() 会把语言冻在进程启动那一刻，
+// 之后在设置里切语言，底部导航与顶栏标题不会跟着变。
 private enum class Tab(val label: String, val title: String, val icon: ImageVector) {
     Home("首页", "无线数据线", Icons.Filled.Home),
     Files("文件", "文件", Icons.Filled.List),
@@ -189,8 +192,8 @@ fun AppRoot(
         }
     }
 
-    // 电池白名单：服务开着但没放行，息屏后循环会被系统冻住，电脑端表现为"看不到文件"。
-    // 首页给一条提示，免得用户去猜"为什么息屏就断"。
+    // 电池白名单：服务开着但没放行，息屏后循环会被系统冻住，电脑端表现为看不到文件。
+    // 首页给一条提示，免得用户去猜为什么息屏就断。
     val context = LocalContext.current
     val backgroundFlag by BackgroundSync.enabled.collectAsStateWithLifecycle()
     var batteryAllowed by remember { mutableStateOf(BatteryOptimization.isIgnoring(context)) }
@@ -280,12 +283,12 @@ fun AppRoot(
     //
     // 扫码方以前**从来不申请**这两个权限（只有出码方打开热点开关时才申请过），
     // 于是 13+ 上 `requestNetwork` 直接抛 SecurityException、被 runCatching 吞掉，
-    // 表现就是"热点永远连不上、悄悄退回普通 Wi-Fi"（1.5.56 由三星日志定位）。
+    // 表现就是热点永远连不上、悄悄退回普通 Wi-Fi（1.5.56 由三星日志定位）。
     //
     // 1.5.57 起判定统一在 HotspotPermissions：
     // - 申请时两个一起要（有的 ROM 只认定位，有的只认附近设备）；
     // - **回调里不再看返回的 map，而是重新查真实授权状态** —— map 里 `any`/`all`
-    //   的判断和系统 `anyOf` 的规则对不齐，只授一个时会走到"以为有权限"的死路；
+    //   的判断和系统 `anyOf` 的规则对不齐，只授一个时会走到以为有权限的死路；
     // - 申请完仍然没有权限，说明系统不会再弹框（拒绝过两次），给「去设置」的出口。
     var pendingDirect by remember { mutableStateOf<DirectPayload?>(null) }
 
@@ -400,11 +403,11 @@ fun AppRoot(
         contentWindowInsets = WindowInsets.safeDrawing,
         topBar = {
             // 退出入口常驻在右上角（所有页签都在），不再只在首页给
-            WcTopBar(title = tab.title) {
+            WcTopBar(title = Str.t(tab.title)) {
                 WcIconAction(
                     icon = PowerIcon,
                     onClick = { confirmingExit = true },
-                    contentDescription = "退出应用",
+                    contentDescription = Str.t("退出应用"),
                     danger = true,
                 )
             }
@@ -539,10 +542,10 @@ fun AppRoot(
     if (confirmingExit) {
         WcDialog(
             onDismissRequest = { confirmingExit = false },
-            title = { Text("退出应用") },
+            title = { Text(Str.t("退出应用")) },
             text = {
                 Text(
-                    text = "会结束后台服务与所有连接。下次打开需要重新连电脑，不需要重新配对。",
+                    text = Str.t("会结束后台服务与所有连接。下次打开需要重新连电脑，不需要重新配对。"),
                     fontSize = 13.sp,
                     color = WcColors.Text,
                 )
@@ -554,11 +557,11 @@ fun AppRoot(
                         onExitApp()
                     },
                 ) {
-                    Text("退出", color = WcColors.Error)
+                    Text(Str.t("退出"), color = WcColors.Error)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { confirmingExit = false }) { Text("取消") }
+                TextButton(onClick = { confirmingExit = false }) { Text(Str.t("取消")) }
             },
         )
     }
@@ -568,7 +571,7 @@ fun AppRoot(
         ShareTargetDialog(
             label = draft.label,
             devices = pairingState.pairedDevices.filter { it.isPaired },
-            // 只有真连着才算"已连接"：配对过但断着的那台，点下去要先找它
+            // 只有真连着才算已连接：配对过但断着的那台，点下去要先找它
             connectedDeviceId = if (pairingState.isConnected) pairingState.sessionDeviceId else null,
             busy = shareBusy,
             message = shareMessage,
@@ -622,7 +625,7 @@ private fun BottomTabs(selected: Tab, onSelect: (Tab) -> Unit) {
                     )
                     Spacer(Modifier.height(3.dp))
                     Text(
-                        text = item.label,
+                        text = Str.t(item.label),
                         fontSize = 11.sp,
                         fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
                         color = if (active) WcColors.Accent else WcColors.Muted,

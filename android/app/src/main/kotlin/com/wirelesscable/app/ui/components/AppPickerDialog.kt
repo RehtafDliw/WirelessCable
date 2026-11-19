@@ -41,11 +41,12 @@ import com.wirelesscable.app.ui.theme.WcColors
 import com.wirelesscable.app.ui.theme.WcSpace
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.wirelesscable.app.core.i18n.Str
 
 /**
  * 应用选择器。
  *
- * 只做一件事：把"这台手机上装了什么"列出来让人勾。默认只显示有桌面图标的，
+ * 只做一件事：把这台手机上装了什么列出来让人勾。默认只显示有桌面图标的，
  * 系统组件（几百个）折叠起来——但**不隐藏**，用户要传的很可能正是预装应用。
  */
 @Composable
@@ -74,11 +75,11 @@ fun AppPickerDialog(
 
     WcDialog(
         onDismissRequest = onDismiss,
-        title = { Text("选择应用", fontSize = 16.sp) },
+        title = { Text(Str.t("选择应用"), fontSize = 16.sp) },
         text = {
             val list = apps
             if (list == null) {
-                Text("正在读取应用列表…", fontSize = 13.sp, color = WcColors.Muted)
+                Text(Str.t("正在读取应用列表…"), fontSize = 13.sp, color = WcColors.Muted)
                 return@WcDialog
             }
 
@@ -86,7 +87,7 @@ fun AppPickerDialog(
                 WcInput(
                     value = query,
                     onValueChange = { query = it },
-                    label = "搜索名称或包名",
+                    label = Str.t("搜索名称或包名"),
                     modifier = Modifier.fillMaxWidth(),
                 )
 
@@ -95,14 +96,14 @@ fun AppPickerDialog(
                 if (list.size <= 1) {
                     Spacer(Modifier.height(WcSpace.s2))
                     Text(
-                        text = "只读到 ${list.size} 个应用。系统限制了「应用列表」读取：" +
-                            "到应用权限里打开它，再点「重新读取」；仍不行就重启一次应用" +
-                            "（有的 ROM 在进程启动时才生效）。",
+                        text = Str.t("只读到 ${list.size} 个应用。系统限制了「应用列表」读取：") +
+                            Str.t("到应用权限里打开它，再点「重新读取」；仍不行就重启一次应用") +
+                            Str.t("（有的 ROM 在进程启动时才生效）。"),
                         fontSize = 11.5.sp,
                         color = WcColors.WarningText,
                     )
                     Text(
-                        text = "打开应用设置",
+                        text = Str.t("打开应用设置"),
                         fontSize = 12.5.sp,
                         color = WcColors.Accent,
                         modifier = Modifier
@@ -118,7 +119,7 @@ fun AppPickerDialog(
                             .padding(vertical = 6.dp),
                     )
                     Text(
-                        text = "重新读取",
+                        text = Str.t("重新读取"),
                         fontSize = 12.5.sp,
                         color = WcColors.Accent,
                         modifier = Modifier
@@ -136,7 +137,7 @@ fun AppPickerDialog(
                         app.packageName.contains(keyword, ignoreCase = true)
                 }
 
-                // 搜索时不做折叠：用户明确在找东西，折叠只会让结果看起来"没有"
+                // 搜索时不做折叠：用户明确在找东西，折叠只会让结果看起来没有
                 val visible = if (keyword.isNotEmpty() || showComponents) {
                     matched
                 } else {
@@ -159,7 +160,7 @@ fun AppPickerDialog(
                     if (keyword.isEmpty() && !showComponents && components > 0) {
                         item {
                             Text(
-                                text = "显示系统组件（$components）",
+                                text = Str.t("显示系统组件（$components）"),
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable { showComponents = true }
@@ -173,7 +174,7 @@ fun AppPickerDialog(
                     if (visible.isEmpty()) {
                         item {
                             Text(
-                                text = "没有匹配的应用",
+                                text = Str.t("没有匹配的应用"),
                                 modifier = Modifier.padding(vertical = WcSpace.s3),
                                 fontSize = 13.sp,
                                 color = WcColors.Muted,
@@ -188,11 +189,11 @@ fun AppPickerDialog(
                 onClick = { onConfirm(apps.orEmpty().filter { it.packageName in selected }) },
                 enabled = selected.isNotEmpty(),
             ) {
-                Text(if (selected.isEmpty()) "加入" else "加入 ${selected.size} 个")
+                Text(if (selected.isEmpty()) Str.t("加入") else Str.t("加入 ${selected.size} 个"))
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(onClick = onDismiss) { Text(Str.t("取消")) }
         },
     )
 }
@@ -229,9 +230,9 @@ private fun AppRow(
                 append(app.versionText)
                 append(" · ")
                 append(formatAppSize(app.totalBytes))
-                if (app.parts.size > 1) append(" · 分体 ${app.parts.size}")
-                if (app.isSystem) append(" · 系统")
-                if (!app.readable) append(" · 读不到安装包")
+                if (app.parts.size > 1) append(Str.t(" · 分体 ${app.parts.size}"))
+                if (app.isSystem) append(Str.t(" · 系统"))
+                if (!app.readable) append(Str.t(" · 读不到安装包"))
             }
             Text(
                 text = detail,

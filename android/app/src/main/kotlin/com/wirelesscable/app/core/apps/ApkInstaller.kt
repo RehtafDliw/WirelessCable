@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageInstaller
 import android.net.Uri
 import android.provider.Settings
+import com.wirelesscable.app.core.i18n.Str
 import java.io.File
 
 /**
@@ -38,7 +39,7 @@ object ApkInstaller {
     fun install(context: Context, parts: List<File>): String? {
         val apks = parts.filter { it.isFile && it.length() > 0 }
         if (apks.isEmpty()) {
-            return "没有可安装的文件"
+            return Str.t("没有可安装的文件")
         }
 
         return runCatching {

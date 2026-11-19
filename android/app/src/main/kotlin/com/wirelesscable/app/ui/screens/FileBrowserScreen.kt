@@ -62,6 +62,7 @@ import com.wirelesscable.app.ui.theme.WcType
 import com.wirelesscable.app.vm.FileBrowserUiState
 import com.wirelesscable.app.vm.FileSortBy
 import com.wirelesscable.app.vm.TargetOperation
+import com.wirelesscable.app.core.i18n.Str
 
 /**
  * 文件浏览页。
@@ -71,7 +72,7 @@ import com.wirelesscable.app.vm.TargetOperation
  * - 长按 → 进入多选，左侧变复选框，底部出现操作栏（属性/重命名/移动/复制/删除）；
  * - 点「移动」或「复制」→ 进入目标目录选择，底部变成「移动到此处」/「复制到此处」。
  *
- * 行内不放任何按钮：一行只承载"名称 + 大小 + 时间"，密度优先。
+ * 行内不放任何按钮：一行只承载名称 + 大小 + 时间，密度优先。
  */
 @Composable
 fun FileBrowserScreen(
@@ -97,9 +98,9 @@ fun FileBrowserScreen(
     onBatchDownload: () -> Unit,
     /** 下载整个文件夹：服务端展开成一批任务，落点由用户选。 */
     onDownloadFolder: (FileEntryDto) -> Unit,
-    /** 把选中项挂起为"移动"，进入目标目录选择。 */
+    /** 把选中项挂起为移动，进入目标目录选择。 */
     onBeginMove: () -> Unit,
-    /** 把选中项挂起为"复制"，进入目标目录选择。 */
+    /** 把选中项挂起为复制，进入目标目录选择。 */
     onBeginCopy: () -> Unit,
     /** 取消挂起的移动/复制。 */
     onCancelPending: () -> Unit,
@@ -114,7 +115,7 @@ fun FileBrowserScreen(
     val selectedEntries = state.entries.filter { it.relativePath in state.selected }
     val singleSelected = selectedEntries.singleOrNull()
 
-    // 选择态与目标选择态都不给"新建/上传"：这时候用户的操作对象已经换成了选中项
+    // 选择态与目标选择态都不给新建/上传：这时候用户的操作对象已经换成了选中项
     val mutatingAllowed = state.selected.isEmpty() && state.pending == null && !state.readOnly
     val atMachineRoot = state.currentPath.isEmpty() &&
         state.roots.firstOrNull { it.rootId == state.currentRootId }?.kind == FileProtocol.KIND_MACHINE
@@ -138,7 +139,8 @@ fun FileBrowserScreen(
             },
         )
 
-        state.message?.let { message ->
+        state.message?.let { raw ->
+            val message = Str.t(raw)
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -148,7 +150,8 @@ fun FileBrowserScreen(
             }
         }
 
-        state.warning?.let { warning ->
+        state.warning?.let { raw ->
+            val warning = Str.t(raw)
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -166,7 +169,7 @@ fun FileBrowserScreen(
                     .padding(top = 40.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text("空目录", color = WcColors.Muted, fontSize = 13.sp)
+                Text(Str.t("空目录"), color = WcColors.Muted, fontSize = 13.sp)
             }
         } else {
             LazyColumn(
@@ -224,17 +227,17 @@ fun FileBrowserScreen(
     state.infoText?.let { info ->
         WcDialog(
             onDismissRequest = onDismissInfo,
-            title = { Text("属性") },
+            title = { Text(Str.t("属性")) },
             text = { Text(info, fontSize = 13.sp) },
             confirmButton = {
-                TextButton(onClick = onDismissInfo) { Text("关闭") }
+                TextButton(onClick = onDismissInfo) { Text(Str.t("关闭")) }
             },
         )
     }
 
     if (showCreateDialog) {
         NameDialog(
-            title = "新建文件夹",
+            title = Str.t("新建文件夹"),
             initial = "",
             onDismiss = { showCreateDialog = false },
             onConfirm = { name ->
@@ -246,7 +249,7 @@ fun FileBrowserScreen(
 
     renameTarget?.let { target ->
         NameDialog(
-            title = "重命名",
+            title = Str.t("重命名"),
             initial = target.name,
             onDismiss = { renameTarget = null },
             onConfirm = { name ->
@@ -259,16 +262,16 @@ fun FileBrowserScreen(
     if (deleteConfirm) {
         WcDialog(
             onDismissRequest = { deleteConfirm = false },
-            title = { Text("删除选中的 ${state.selected.size} 项？") },
-            text = { Text("删除后无法恢复。") },
+            title = { Text(Str.t("删除选中的 ${state.selected.size} 项？")) },
+            text = { Text(Str.t("删除后无法恢复。")) },
             confirmButton = {
                 TextButton(onClick = {
                     deleteConfirm = false
                     onDeleteSelected(true)
-                }) { Text("删除", color = WcColors.Error) }
+                }) { Text(Str.t("删除"), color = WcColors.Error) }
             },
             dismissButton = {
-                TextButton(onClick = { deleteConfirm = false }) { Text("取消") }
+                TextButton(onClick = { deleteConfirm = false }) { Text(Str.t("取消")) }
             },
         )
     }
@@ -303,7 +306,8 @@ private fun FileHeader(
     var searchOpen by remember { mutableStateOf(false) }
     var sortOpen by remember { mutableStateOf(false) }
 
-    val rootName = roots.firstOrNull { it.rootId == currentRootId }?.displayName ?: "电脑"
+    val rootName = roots.firstOrNull { it.rootId == currentRootId }?.displayName?.let { Str.t(it) }
+        ?: Str.t("电脑")
     // 多个根时上面已经有切换胶囊，这里再写一遍根名就是重复
     val crumb = when {
         path.isEmpty() && roots.size > 1 -> ""
@@ -325,7 +329,9 @@ private fun FileHeader(
                 roots.forEach { root ->
                     val active = root.rootId == currentRootId
                     Text(
-                        text = root.displayName,
+                        // 根名由服务端下发（"此电脑"、"传输目录"…），渲染时才翻；
+                        // 用户自己的共享目录名查不到词条，原样显示
+                        text = Str.t(root.displayName),
                         fontSize = WcType.labelSize,
                         fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
                         color = if (active) WcColors.Accent else WcColors.Text2,
@@ -347,7 +353,7 @@ private fun FileHeader(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (canGoUp) {
-                WcIconAction(icon = ArrowLeftIcon, onClick = onGoUp, contentDescription = "上一级")
+                WcIconAction(icon = ArrowLeftIcon, onClick = onGoUp, contentDescription = Str.t("上一级"))
                 Spacer(Modifier.width(WcSpace.s1))
             }
 
@@ -364,12 +370,12 @@ private fun FileHeader(
                 WcIconAction(
                     icon = SortIcon,
                     onClick = { sortOpen = true },
-                    contentDescription = "排序：${sortBy.label()}",
+                    contentDescription = Str.t("排序：${sortBy.label()}"),
                 )
                 DropdownMenu(expanded = sortOpen, onDismissRequest = { sortOpen = false }) {
                     FileSortBy.entries.forEach { option ->
                         DropdownMenuItem(
-                            text = { Text("按${option.label()}", fontSize = 13.sp) },
+                            text = { Text(Str.t("按${option.label()}"), fontSize = 13.sp) },
                             onClick = {
                                 sortOpen = false
                                 onSortBy(option)
@@ -389,16 +395,16 @@ private fun FileHeader(
                         onSearch("")
                     }
                 },
-                contentDescription = "搜索",
+                contentDescription = Str.t("搜索"),
             )
 
             if (onUpload != null) {
                 Spacer(Modifier.width(WcSpace.s2))
-                WcIconAction(icon = UploadIcon, onClick = onUpload, contentDescription = "上传到此目录")
+                WcIconAction(icon = UploadIcon, onClick = onUpload, contentDescription = Str.t("上传到此目录"))
             }
             if (onCreate != null) {
                 Spacer(Modifier.width(WcSpace.s2))
-                WcIconAction(icon = PlusIcon, onClick = onCreate, contentDescription = "新建文件夹")
+                WcIconAction(icon = PlusIcon, onClick = onCreate, contentDescription = Str.t("新建文件夹"))
             }
         }
 
@@ -409,7 +415,7 @@ private fun FileHeader(
                     keyword = it
                     onSearch(it)
                 },
-                placeholder = { Text("搜索当前目录", fontSize = 13.sp) },
+                placeholder = { Text(Str.t("搜索当前目录"), fontSize = 13.sp) },
                 singleLine = true,
                 textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp),
                 modifier = Modifier
@@ -422,10 +428,10 @@ private fun FileHeader(
 
 /** 排序方式的显示名。 */
 private fun FileSortBy.label(): String = when (this) {
-    FileSortBy.NAME -> "名称"
-    FileSortBy.SIZE -> "大小"
-    FileSortBy.MODIFIED -> "修改时间"
-    FileSortBy.TYPE -> "类型"
+    FileSortBy.NAME -> Str.t("名称")
+    FileSortBy.SIZE -> Str.t("大小")
+    FileSortBy.MODIFIED -> Str.t("修改时间")
+    FileSortBy.TYPE -> Str.t("类型")
 }
 
 /**
@@ -461,7 +467,7 @@ private fun SelectionBar(
         (single.capabilities == 0 ||
             (single.capabilities and com.wirelesscable.app.core.files.FileCapabilities.RENAME) != 0)
 
-    // 移动/复制都支持多选：以前只判了"单选"，选两项就点不动了
+    // 移动/复制都支持多选：以前只判了单选，选两项就点不动了
     val moveEnabled = canWrite && allSupport(com.wirelesscable.app.core.files.FileCapabilities.MOVE)
 
     // 复制：文件要能读、目录要能列（服务端递归复制），目标侧由服务端按权限位判定
@@ -470,7 +476,7 @@ private fun SelectionBar(
     val copyEnabled = canWrite && selected.all { entry ->
         entry.capabilities == 0 || (entry.capabilities and readable) != 0
     }
-    // 选中单个文件夹也能"下载"——那是整文件夹下载；混选（文件+夹）仍按文件逐个下
+    // 选中单个文件夹也能下载——那是整文件夹下载；混选（文件+夹）仍按文件逐个下
     val singleFolder = selected.singleOrNull()?.takeIf { it.isDirectory }
     val downloadEnabled = selected.isNotEmpty() &&
         (selected.any { !it.isDirectory } || singleFolder != null)
@@ -483,12 +489,12 @@ private fun SelectionBar(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = "已选 $count 项",
+                text = Str.t("已选 $count 项"),
                 color = WcColors.Text,
                 fontSize = 13.sp,
                 modifier = Modifier.weight(1f),
             )
-            WcLinkButton(text = "取消", onClick = onClear)
+            WcLinkButton(text = Str.t("取消"), onClick = onClear)
         }
 
         Spacer(Modifier.height(2.dp))
@@ -498,23 +504,23 @@ private fun SelectionBar(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            BarAction("属性", enabled = single != null, onClick = onShowInfo)
-            BarAction("重命名", enabled = renameEnabled, onClick = onRename)
-            BarAction("移动", enabled = moveEnabled, onClick = onMove)
-            // 复制只需要"能读源 + 能写目标"，与条目的 Move 能力位无关
-            BarAction("复制", enabled = copyEnabled, onClick = onCopy)
+            BarAction(Str.t("属性"), enabled = single != null, onClick = onShowInfo)
+            BarAction(Str.t("重命名"), enabled = renameEnabled, onClick = onRename)
+            BarAction(Str.t("移动"), enabled = moveEnabled, onClick = onMove)
+            // 复制只需要能读源 + 能写目标，与条目的 Move 能力位无关
+            BarAction(Str.t("复制"), enabled = copyEnabled, onClick = onCopy)
             BarAction(
-                label = if (singleFolder != null) "下载文件夹" else "下载",
+                label = if (singleFolder != null) Str.t("下载文件夹") else Str.t("下载"),
                 enabled = downloadEnabled,
                 onClick = { if (singleFolder != null) onDownloadFolder(singleFolder) else onDownload() },
             )
-            // 删除单独看根上的 Delete 能力位：只判"可写"会让按钮亮着却被服务端拒绝
-            BarAction("删除", enabled = canDeleteHere, onClick = onDelete, danger = true)
+            // 删除单独看根上的 Delete 能力位：只判可写会让按钮亮着却被服务端拒绝
+            BarAction(Str.t("删除"), enabled = canDeleteHere, onClick = onDelete, danger = true)
         }
     }
 }
 
-/** 目标目录选择时的底部栏：这里就是用户确认"落到这儿"的地方。 */
+/** 目标目录选择时的底部栏：这里就是用户确认落到这儿的地方。 */
 @Composable
 private fun PendingBar(
     operation: TargetOperation,
@@ -523,7 +529,7 @@ private fun PendingBar(
     onConfirm: () -> Unit,
     onCancel: () -> Unit,
 ) {
-    val label = if (operation == TargetOperation.MOVE) "移动" else "复制"
+    val label = if (operation == TargetOperation.MOVE) Str.t("移动") else Str.t("复制")
 
     Column(
         modifier = Modifier
@@ -533,18 +539,18 @@ private fun PendingBar(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = "把 $count 项${label}到 ${target.ifEmpty { "/" }}",
+                text = Str.t("把 $count 项${label}到 ${target.ifEmpty { "/" }}"),
                 color = WcColors.Text,
                 fontSize = 12.5.sp,
                 modifier = Modifier.weight(1f),
             )
-            WcLinkButton(text = "取消", onClick = onCancel)
+            WcLinkButton(text = Str.t("取消"), onClick = onCancel)
         }
 
         Spacer(Modifier.height(6.dp))
 
         WcPrimaryButton(
-            text = if (operation == TargetOperation.MOVE) "移动到此处" else "复制到此处",
+            text = if (operation == TargetOperation.MOVE) Str.t("移动到此处") else Str.t("复制到此处"),
             onClick = onConfirm,
             enabled = true,
         )
@@ -716,10 +722,10 @@ private fun NameDialog(
             TextButton(
                 onClick = { if (value.isNotBlank()) onConfirm(value.trim()) },
                 enabled = value.isNotBlank(),
-            ) { Text("确定") }
+            ) { Text(Str.t("确定")) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(onClick = onDismiss) { Text(Str.t("取消")) }
         },
     )
 }

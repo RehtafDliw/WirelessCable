@@ -2,6 +2,7 @@ package com.wirelesscable.app.core.transfer
 
 import com.wirelesscable.app.core.protocol.TransferStates
 import java.util.Locale
+import com.wirelesscable.app.core.i18n.Str
 
 /**
  * 传输界面的纯函数格式化。
@@ -56,23 +57,23 @@ object TransferFormat {
         if (seconds > MAX_REMAINING_SECONDS) return null
 
         return when {
-            seconds < 60 -> "剩余 $seconds 秒"
-            seconds < 3600 -> "剩余 ${seconds / 60} 分 ${seconds % 60} 秒"
-            else -> "剩余 ${seconds / 3600} 时 ${(seconds % 3600) / 60} 分"
+            seconds < 60 -> Str.t("剩余 $seconds 秒")
+            seconds < 3600 -> Str.t("剩余 ${seconds / 60} 分 ${seconds % 60} 秒")
+            else -> Str.t("剩余 ${seconds / 3600} 时 ${(seconds % 3600) / 60} 分")
         }
     }
 
     /** 状态文案。与 TransferStates 一一对应，未知状态原样显示而不是吞掉。 */
     fun stateLabel(state: String): String = when (state) {
-        TransferStates.WAITING -> "等待中"
-        TransferStates.PREPARING -> "准备中"
-        TransferStates.TRANSFERRING -> "传输中"
-        TransferStates.VERIFYING -> "校验中"
-        TransferStates.COMPLETED -> "已完成"
-        TransferStates.FAILED -> "失败"
-        TransferStates.CANCELLED -> "已取消"
-        TransferStates.INTERRUPTED -> "已中断"
-        TransferStates.PAUSED -> "已暂停"
+        TransferStates.WAITING -> Str.t("等待中")
+        TransferStates.PREPARING -> Str.t("准备中")
+        TransferStates.TRANSFERRING -> Str.t("传输中")
+        TransferStates.VERIFYING -> Str.t("校验中")
+        TransferStates.COMPLETED -> Str.t("已完成")
+        TransferStates.FAILED -> Str.t("失败")
+        TransferStates.CANCELLED -> Str.t("已取消")
+        TransferStates.INTERRUPTED -> Str.t("已中断")
+        TransferStates.PAUSED -> Str.t("已暂停")
         else -> state
     }
 

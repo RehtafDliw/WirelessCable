@@ -55,6 +55,7 @@ import com.wirelesscable.app.ui.theme.WcRadius
 import com.wirelesscable.app.ui.theme.WcSize
 import com.wirelesscable.app.ui.theme.WcSpace
 import com.wirelesscable.app.ui.theme.WcType
+import com.wirelesscable.app.core.i18n.Str
 
 /**
  * 「关机」图标：一个上端开口的圆弧 + 一根竖线。
@@ -360,7 +361,7 @@ fun WcStagger(index: Int = 0, content: @Composable () -> Unit) {
         progress.animateTo(1f, animationSpec = tween(WcMotion.DurSlow, easing = FastOutSlowInEasing))
     }
     // 用 Column 而不是 Box：一个入场块里通常有多段内容（标题 + 卡片 + 提示），
-    // Box 会把它们全部叠在左上角 —— 真机上表现为"我的设备"被息屏提示盖住。
+    // Box 会把它们全部叠在左上角 —— 真机上表现为我的设备被息屏提示盖住。
     Column(
         modifier = Modifier.graphicsLayer {
             alpha = progress.value
@@ -376,7 +377,7 @@ fun WcStagger(index: Int = 0, content: @Composable () -> Unit) {
  *
  * 参数名与 Material `AlertDialog` 对齐，调用点只换函数名即可。
  * 壳子按令牌来：超椭圆、发丝描边、20dp 内边距、按钮右对齐。
- * 危险动作的按钮由调用点自己给颜色，这里不提供"主按钮"默认值——
+ * 危险动作的按钮由调用点自己给颜色，这里不提供主按钮默认值——
  * 一个默认蓝色「删除」比没有按钮更糟。
  */
 @Composable
@@ -419,7 +420,7 @@ fun WcDialog(
  * 文本输入。
  *
  * 不用 Material 的 OutlinedTextField：它的描边、内边距、聚焦色都是 Material 的，
- * 一放进令牌化的卡片里就"格格不入"。这里只用 BasicTextField，壳子自己画。
+ * 一放进令牌化的卡片里就格格不入。这里只用 BasicTextField，壳子自己画。
  */
 @Composable
 fun WcInput(

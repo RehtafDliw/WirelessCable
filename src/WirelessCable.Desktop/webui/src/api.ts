@@ -8,6 +8,8 @@
  * 界面上出现的每个数字都必须来自库里的真实状态。
  */
 
+import { errorText } from './i18n';
+
 declare global {
   interface Window {
     __WC_LOCAL__?: string;
@@ -34,7 +36,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     let message = `HTTP ${response.status}`;
     try {
       const body = (await response.json()) as { message?: string; code?: string };
-      message = body.message ?? body.code ?? message;
+      message = errorText(body.code, body.message ?? body.code ?? message);
     } catch {
       // 响应不是 JSON：保留状态码
     }

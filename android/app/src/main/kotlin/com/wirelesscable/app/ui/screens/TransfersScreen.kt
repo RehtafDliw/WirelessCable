@@ -65,6 +65,7 @@ import com.wirelesscable.app.vm.TransferFilter
 import com.wirelesscable.app.vm.TransferTab
 import com.wirelesscable.app.vm.TransferRow
 import com.wirelesscable.app.vm.TransferUiState
+import com.wirelesscable.app.core.i18n.Str
 
 /** 行首选择槽宽度：圆环与勾选框共用同一个槽，进出多选时行内文字不会左右跳。 */
 private val SelectionSlotWidth = 44.dp
@@ -114,7 +115,7 @@ fun TransfersScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             WcSegmented(
-                options = listOf(state.activeTabLabel, state.completedTabLabel),
+                options = listOf(Str.t(state.activeTabLabel), Str.t(state.completedTabLabel)),
                 index = if (active) 0 else 1,
                 onSelect = { onSelectTab(if (it == 0) TransferTab.ACTIVE else TransferTab.COMPLETED) },
                 modifier = Modifier.weight(1f),
@@ -124,12 +125,12 @@ fun TransfersScreen(
                 WcIconAction(
                     icon = CheckIcon,
                     onClick = { onStartSelection(rows.first().taskIds) },
-                    contentDescription = "多选",
+                    contentDescription = Str.t("多选"),
                 )
             }
         }
 
-        // 方向筛选：与上面的"传输中/已完成"正交，一条记录不是发的就是收的
+        // 方向筛选：与上面的传输中/已完成正交，一条记录不是发的就是收的
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -140,9 +141,9 @@ fun TransfersScreen(
                 val active = state.direction == filter
                 Text(
                     text = when (filter) {
-                        TransferFilter.ALL -> "全部"
-                        TransferFilter.SENT -> "我发送的"
-                        TransferFilter.RECEIVED -> "我收到的"
+                        TransferFilter.ALL -> Str.t("全部")
+                        TransferFilter.SENT -> Str.t("我发送的")
+                        TransferFilter.RECEIVED -> Str.t("我收到的")
                     },
                     fontSize = WcType.labelSize,
                     fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
@@ -157,9 +158,14 @@ fun TransfersScreen(
         }
 
         (state.refreshError ?: state.message)?.let { raw ->
-            // 网络层只会说"连接超时"，用户不知道下一步该干什么；
-            // 这一页能做的只有"回首页点重连"，直接写出来
-            val text = if (raw == "连接超时") "连不上电脑（超时）。到首页点「重连」再试" else raw
+            // 网络层只会说连接超时，用户不知道下一步该干什么；
+            // 这一页能做的只有回首页点重连，直接写出来。
+            // 注意比较的是**原文**：拿译文去比中文原文永远不相等（踩过）。
+            val text = if (raw == "连接超时") {
+                Str.t("连不上电脑（超时）。到首页点「重连」再试")
+            } else {
+                Str.t(raw)
+            }
             Text(
                 text = text,
                 fontSize = WcType.labelSize,
@@ -179,11 +185,11 @@ fun TransfersScreen(
 
             if (rows.isEmpty()) {
                 EmptyBlock(
-                    title = state.emptyHint,
+                    title = Str.t(state.emptyHint),
                     detail = when {
-                        !state.ready -> "读取中"
-                        active -> "在电脑上选择文件发送，或从「文件」页发送"
-                        else -> "传完的文件会归档到这里"
+                        !state.ready -> Str.t("读取中")
+                        active -> Str.t("在电脑上选择文件发送，或从「文件」页发送")
+                        else -> Str.t("传完的文件会归档到这里")
                     },
                 )
             } else {
@@ -253,15 +259,15 @@ fun TransfersScreen(
             val allSelected = state.rows.isNotEmpty() &&
                 state.rows.all { row -> row.taskIds.all { it in state.selected } }
 
-            WcSelectionBar(text = state.selectionText, onDone = onClearSelection) {
+            WcSelectionBar(text = Str.t(state.selectionText), onDone = onClearSelection) {
                 WcLinkButton(
-                    text = if (allSelected) "取消全选" else "全选",
+                    text = if (allSelected) Str.t("取消全选") else Str.t("全选"),
                     onClick = { if (allSelected) onClearSelection() else onSelectAll() },
                     color = if (allSelected) WcColors.Muted else WcColors.Accent,
                 )
 
                 state.openableItem?.let { item ->
-                    WcLinkButton(text = "打开", onClick = { onOpenSaved(item.taskId) })
+                    WcLinkButton(text = Str.t("打开"), onClick = { onOpenSaved(item.taskId) })
                 }
                 // 选中了几行就取消几行：单选时这是一条，整批时是整批的任务 id
                 val cancellable = state.selectedRows
@@ -270,13 +276,13 @@ fun TransfersScreen(
 
                 if (cancellable.isNotEmpty()) {
                     WcLinkButton(
-                        text = "取消任务",
+                        text = Str.t("取消任务"),
                         onClick = { onCancel(cancellable) },
                         color = WcColors.Error,
                     )
                 }
                 WcLinkButton(
-                    text = "删除",
+                    text = Str.t("删除"),
                     onClick = {
                         deleteFiles = false
                         confirmingDelete = true
@@ -290,18 +296,18 @@ fun TransfersScreen(
     if (confirmingDelete) {
         WcDialog(
             onDismissRequest = { confirmingDelete = false },
-            title = { Text("删除传输记录") },
+            title = { Text(Str.t("删除传输记录")) },
             text = {
                 Column {
                     val rows = state.selectedRows.size
                     val files = state.selected.size
                     Text(
                         text = if (files == rows) {
-                            "删除 $rows 条记录？"
+                            Str.t("删除 $rows 条记录？")
                         } else {
-                            // 整文件夹选中时把文件数写出来：用户点的是"一行"，
+                            // 整文件夹选中时把文件数写出来：用户点的是一行，
                             // 实际要删的是几十上百条记录，得让他看清
-                            "删除 $rows 项（共 $files 个文件）的记录？"
+                            Str.t("删除 $rows 项（共 $files 个文件）的记录？")
                         },
                         fontSize = 13.sp,
                         color = WcColors.Text,
@@ -317,13 +323,13 @@ fun TransfersScreen(
                         ) {
                             Checkbox(checked = deleteFiles, onCheckedChange = { deleteFiles = it })
                             Text(
-                                text = "同时删除接收到的文件",
+                                text = Str.t("同时删除接收到的文件"),
                                 fontSize = 13.sp,
                                 color = WcColors.Text,
                             )
                         }
                         Text(
-                            text = "只删本机收到的文件。发出去的文件在电脑上，不会被删除；全选时若含发出去的记录，也只删记录。",
+                            text = Str.t("只删本机收到的文件。发出去的文件在电脑上，不会被删除；全选时若含发出去的记录，也只删记录。"),
                             fontSize = 11.5.sp,
                             color = WcColors.Muted,
                             modifier = Modifier.padding(start = 4.dp),
@@ -338,11 +344,11 @@ fun TransfersScreen(
                         onDeleteRecords(deleteFiles && state.canDeleteFiles)
                     },
                 ) {
-                    Text("删除", color = WcColors.Error)
+                    Text(Str.t("删除"), color = WcColors.Error)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { confirmingDelete = false }) { Text("取消") }
+                TextButton(onClick = { confirmingDelete = false }) { Text(Str.t("取消")) }
             },
         )
     }
@@ -365,7 +371,7 @@ private fun EmptyBlock(title: String, detail: String) {
 /**
  * 一行任务。
  *
- * 环形进度承载"完成到哪"，第二行的灰字承载"谁传给谁、多快、还剩多久"。
+ * 环形进度承载完成到哪，第二行的灰字承载谁传给谁、多快、还剩多久。
  * 失败原因直接顶掉灰字——错误信息比速度重要。
  */
 @OptIn(ExperimentalFoundationApi::class)
@@ -402,7 +408,7 @@ private fun TransferItemRow(
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongClick,
-                onLongClickLabel = "多选",
+                onLongClickLabel = Str.t("多选"),
             )
             .padding(horizontal = WcSpace.s3),
         verticalAlignment = Alignment.CenterVertically,
@@ -420,18 +426,18 @@ private fun TransferItemRow(
         } else {
             // 左侧的圈**就是**勾选框的入口：点它进多选并选中这一条。
             // 用户看到 100% 的绿圈会本能地当勾选框去按，之前按它只会打开文件，
-            // 于是"已完成里的多选怎么点都没反应"。点击区放大到 40dp，比 34dp 的圆圈好按。
+            // 于是已完成里的多选怎么点都没反应。点击区放大到 40dp，比 34dp 的圆圈好按。
             Box(
                 modifier = Modifier
                     .width(SelectionSlotWidth)
                     .fillMaxHeight()
-                    // 点击区做满整行高度：只圈 40dp 时，手指偏几像素就落到"打开文件"上
-                    .clickable(onClickLabel = "多选", onClick = onSelectOnly),
+                    // 点击区做满整行高度：只圈 40dp 时，手指偏几像素就落到打开文件上
+                    .clickable(onClickLabel = Str.t("多选"), onClick = onSelectOnly),
                 contentAlignment = Alignment.Center,
             ) {
                 if (completed) {
-                    // 已完成就是 100%，再画一个"100% 环"只是噪音；
-                    // 换成绿点对勾，既表示状态，也明确"这条已经完事"
+                    // 已完成就是 100%，再画一个100% 环只是噪音；
+                    // 换成绿点对勾，既表示状态，也明确这条已经完事
                     DoneMark()
                 } else {
                     WcRing(
@@ -464,10 +470,10 @@ private fun TransferItemRow(
         Spacer(Modifier.width(WcSpace.s2))
 
         when {
-            item.isActive -> WcRowAction(PauseIcon, onPause, contentDescription = "暂停")
-            paused -> WcRowAction(PlayIcon, onResume, contentDescription = "继续")
+            item.isActive -> WcRowAction(PauseIcon, onPause, contentDescription = Str.t("暂停"))
+            paused -> WcRowAction(PlayIcon, onResume, contentDescription = Str.t("继续"))
             item.needsSave && item.state == TransferStates.FAILED ->
-                WcRowAction(RefreshIcon, onRetry, contentDescription = "重试")
+                WcRowAction(RefreshIcon, onRetry, contentDescription = Str.t("重试"))
         }
     }
 }
@@ -500,7 +506,7 @@ private fun DoneMark() {
  * 整文件夹那一行。
  *
  * 200 个文件挂在同一行上：环形进度按整批字节算，标题是文件夹名，
- * 第二行写"已完成 12/200 个文件"——用户要的就是"这个文件夹收了多少"，
+ * 第二行写已完成 12/200 个文件——用户要的就是这个文件夹收了多少，
  * 而不是 200 个文件名。
  *
  * 行上的暂停/继续/取消/删除都作用到**整批**（这是用户定的语义：
@@ -539,7 +545,7 @@ private fun TransferBatchRow(
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongClick,
-                onLongClickLabel = "多选",
+                onLongClickLabel = Str.t("多选"),
             )
             .padding(horizontal = WcSpace.s3),
         verticalAlignment = Alignment.CenterVertically,
@@ -559,7 +565,7 @@ private fun TransferBatchRow(
                 modifier = Modifier
                     .width(SelectionSlotWidth)
                     .fillMaxHeight()
-                    .clickable(onClickLabel = "多选", onClick = onSelectOnly),
+                    .clickable(onClickLabel = Str.t("多选"), onClick = onSelectOnly),
                 contentAlignment = Alignment.Center,
             ) {
                 if (allDone) {
@@ -595,9 +601,9 @@ private fun TransferBatchRow(
         Spacer(Modifier.width(WcSpace.s2))
 
         when {
-            group.isActive && !paused -> WcRowAction(PauseIcon, onPause, contentDescription = "暂停整批")
-            paused -> WcRowAction(PlayIcon, onResume, contentDescription = "继续整批")
-            failed -> WcRowAction(RefreshIcon, onRetry, contentDescription = "重试整批")
+            group.isActive && !paused -> WcRowAction(PauseIcon, onPause, contentDescription = Str.t("暂停整批"))
+            paused -> WcRowAction(PlayIcon, onResume, contentDescription = Str.t("继续整批"))
+            failed -> WcRowAction(RefreshIcon, onRetry, contentDescription = Str.t("重试整批"))
         }
     }
 }
@@ -605,16 +611,16 @@ private fun TransferBatchRow(
 /**
  * 整批的第二行：方向 · 已完成几个 · 总大小（在传时追加速度）。
  *
- * 不写速度以外的推算：整批的剩余时间要按"剩余字节 ÷ 当前总速度"算，
+ * 不写速度以外的推算：整批的剩余时间要按剩余字节 ÷ 当前总速度算，
  * 几个文件速度不均时这个数会跳得很厉害，宁可不显示。
  */
 private fun TransferRow.Batch.metaLine(inboxBlocked: Boolean): String {
-    val direction = if (isUpload) "本机 → ${lead.deviceName}" else "${lead.deviceName} → 本机"
+    val direction = if (isUpload) Str.t("本机 → ${lead.deviceName}") else Str.t("${lead.deviceName} → 本机")
     val parts = mutableListOf(direction)
     parts += if (completedCount == fileCount) {
-        "$fileCount 个文件"
+        Str.t("$fileCount 个文件")
     } else {
-        "已完成 $completedCount/$fileCount 个文件"
+        Str.t("已完成 $completedCount/$fileCount 个文件")
     }
     parts += TransferFormat.bytes(totalBytes)
 
@@ -622,9 +628,9 @@ private fun TransferRow.Batch.metaLine(inboxBlocked: Boolean): String {
         parts += TransferFormat.speed(bytesPerSecond)
     }
 
-    // 缺「所有文件访问权」时整批都卡在等待，不说清楚用户只会觉得"没反应"
+    // 缺「所有文件访问权」时整批都卡在等待，不说清楚用户只会觉得没反应
     if (inboxBlocked && entries.any { it.needsSave }) {
-        parts += "需要「所有文件访问权限」"
+        parts += Str.t("需要「所有文件访问权限」")
     }
 
     return parts.joinToString(" · ")
@@ -633,21 +639,21 @@ private fun TransferRow.Batch.metaLine(inboxBlocked: Boolean): String {
 /**
  * 第二行：方向 · 状态 · 速度 · 剩余。
  *
- * 状态语必须来自真实状态机；等待接收时还要区分"缺所有文件访问权"与"还没轮到"，
+ * 状态语必须来自真实状态机；等待接收时还要区分缺所有文件访问权与还没轮到，
  * 否则用户看到的永远是「接收中…」，会以为卡死。
  */
 private fun TransferItem.metaLine(inboxBlocked: Boolean): String {
-    val direction = if (isUpload) "本机 → $deviceName" else "$deviceName → 本机"
+    val direction = if (isUpload) Str.t("本机 → $deviceName") else Str.t("$deviceName → 本机")
 
     if (needsSave) {
         when (state) {
             TransferStates.WAITING ->
-                return if (inboxBlocked) "需要「所有文件访问权限」" else "等待接收"
-            TransferStates.INTERRUPTED -> return "已中断，会自动续传"
+                return if (inboxBlocked) Str.t("需要「所有文件访问权限」") else Str.t("等待接收")
+            TransferStates.INTERRUPTED -> return Str.t("已中断，会自动续传")
         }
     }
 
-    errorMessage?.let { return it }
+    errorMessage?.let { return Str.t(it) }
 
     if (state == TransferStates.COMPLETED) {
         return "$direction · ${TransferFormat.bytes(totalBytes)}"
@@ -657,8 +663,8 @@ private fun TransferItem.metaLine(inboxBlocked: Boolean): String {
         return "$direction · ${TransferFormat.stateLabel(state)}"
     }
 
-    // 正在传的时候不必再写"传输中"：环形进度和暂停键已经说明了一切，
-    // 这一行留给"多快、还剩多久"（准备中/校验中这类中间态才写状态）
+    // 正在传的时候不必再写传输中：环形进度和暂停键已经说明了一切，
+    // 这一行留给多快、还剩多久（准备中/校验中这类中间态才写状态）
     val parts = mutableListOf(direction)
     if (bytesPerSecond > 0L) parts += TransferFormat.speed(bytesPerSecond)
     if (state != TransferStates.TRANSFERRING) parts += TransferFormat.stateLabel(state)

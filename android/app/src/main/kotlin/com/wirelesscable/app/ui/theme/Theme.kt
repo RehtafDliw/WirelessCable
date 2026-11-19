@@ -16,6 +16,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
+import com.wirelesscable.app.core.i18n.Str
 
 /**
  * 界面令牌。
@@ -28,7 +29,7 @@ import androidx.compose.ui.platform.LocalView
  * 改成 local 读取要动所有文件；这里的属性都是 Compose State，切换主题会自动触发重组。
  */
 data class WcPalette(
-    /** 页面底色（旧字段名保留：它一直是"内容区背景"）。 */
+    /** 页面底色（旧字段名保留：它一直是内容区背景）。 */
     val surface: Color,
     val card: Color,
     /** 下沉表面：列表底、输入框、图标座。 */

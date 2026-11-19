@@ -69,6 +69,7 @@ import com.wirelesscable.app.ui.components.CloseIcon
 import com.wirelesscable.app.ui.theme.WcColors
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import com.wirelesscable.app.core.i18n.Str
 
 /**
  * 扫码配对。相机预览 + 本地解码，识别到内容即回调（只回调一次）。
@@ -135,20 +136,20 @@ fun ScanScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Text(text = "需要相机权限", color = Color.White, fontSize = 15.sp)
+                Text(text = Str.t("需要相机权限"), color = Color.White, fontSize = 15.sp)
                 Button(onClick = { launcher.launch(Manifest.permission.CAMERA) }) {
-                    Text("授权")
+                    Text(Str.t("授权"))
                 }
 
                 if (deniedOnce) {
                     Text(
-                        text = "系统可能不再弹框，需要到应用设置里打开",
+                        text = Str.t("系统可能不再弹框，需要到应用设置里打开"),
                         color = Color(0x99FFFFFF),
                         fontSize = 12.sp,
                         textAlign = TextAlign.Center,
                     )
                     TextButton(onClick = { openAppDetails(context) }) {
-                        Text("打开应用设置", color = WcColors.Accent, fontSize = 13.sp)
+                        Text(Str.t("打开应用设置"), color = WcColors.Accent, fontSize = 13.sp)
                     }
                 }
             }
@@ -216,9 +217,9 @@ fun ScanScreen(
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            ScanIconButton(icon = CloseIcon, contentDescription = "关闭", onClick = onClose)
+            ScanIconButton(icon = CloseIcon, contentDescription = Str.t("关闭"), onClick = onClose)
             Text(
-                text = "扫码配对",
+                text = Str.t("扫码配对"),
                 color = Color.White,
                 fontSize = 17.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -237,8 +238,8 @@ fun ScanScreen(
                 .padding(bottom = 40.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            ScanPillButton(text = "手动配对", onClick = { manualOpen = true })
-            ScanPillButton(text = "当面直连", onClick = onOpenDirect)
+            ScanPillButton(text = Str.t("手动配对"), onClick = { manualOpen = true })
+            ScanPillButton(text = Str.t("当面直连"), onClick = onOpenDirect)
         }
 
         if (manualOpen) {
@@ -325,7 +326,7 @@ private fun CameraPreview(onResult: (String) -> Unit) {
 /**
  * 手动配对。
  *
- * 二维码只是一个"把地址+端口+指纹一次带过去"的信封；这三样东西我们本来就存着，
+ * 二维码只是一个把地址+端口+指纹一次带过去的信封；这三样东西我们本来就存着，
  * 所以没摄像头、不方便扫码、或者令牌丢了要重配时，直接填/确认这三项走同一套配对流程。
  */
 @Composable
@@ -343,14 +344,14 @@ private fun ManualPairDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("手动配对") },
+        title = { Text(Str.t("手动配对")) },
         text = {
             Column {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
                         value = host,
                         onValueChange = onHost,
-                        label = { Text("地址") },
+                        label = { Text(Str.t("地址")) },
                         singleLine = true,
                         enabled = !busy,
                         modifier = Modifier.weight(1f),
@@ -358,7 +359,7 @@ private fun ManualPairDialog(
                     OutlinedTextField(
                         value = port,
                         onValueChange = onPort,
-                        label = { Text("端口") },
+                        label = { Text(Str.t("端口")) },
                         singleLine = true,
                         enabled = !busy,
                         modifier = Modifier.width(104.dp),
@@ -370,7 +371,7 @@ private fun ManualPairDialog(
                 OutlinedTextField(
                     value = fingerprint,
                     onValueChange = onFingerprint,
-                    label = { Text("证书指纹") },
+                    label = { Text(Str.t("证书指纹")) },
                     singleLine = true,
                     enabled = !busy,
                     textStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.5.sp),
@@ -384,11 +385,11 @@ private fun ManualPairDialog(
         },
         confirmButton = {
             TextButton(onClick = onPair, enabled = !busy) {
-                Text(if (busy) "配对中…" else "配对")
+                Text(if (busy) Str.t("配对中…") else Str.t("配对"))
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(onClick = onDismiss) { Text(Str.t("取消")) }
         },
     )
 }

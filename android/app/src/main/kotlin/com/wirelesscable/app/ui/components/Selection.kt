@@ -20,6 +20,7 @@ import com.wirelesscable.app.ui.theme.WcColors
 import com.wirelesscable.app.ui.theme.WcRadius
 import com.wirelesscable.app.ui.theme.WcSpace
 import com.wirelesscable.app.ui.theme.WcType
+import com.wirelesscable.app.core.i18n.Str
 
 /**
  * 列表多选的公共件：勾选框 + 底部操作条。
@@ -52,7 +53,7 @@ fun WcSelectionMark(checked: Boolean) {
  * 多选时的底部操作条：左边状态文字，右边动作，「完成」永远在最右。
  *
  * @param actions 由调用点自己排（打开 / 删除 / 取消任务…），这里不预设，
- *                免得出现"这个页面有、那个页面没有"的默认值。
+ *                免得出现这个页面有、那个页面没有的默认值。
  */
 @Composable
 fun WcSelectionBar(
@@ -74,6 +75,6 @@ fun WcSelectionBar(
             modifier = Modifier.weight(1f),
         )
         actions()
-        WcLinkButton(text = "完成", onClick = onDone, color = WcColors.Muted)
+        WcLinkButton(text = Str.t("完成"), onClick = onDone, color = WcColors.Muted)
     }
 }

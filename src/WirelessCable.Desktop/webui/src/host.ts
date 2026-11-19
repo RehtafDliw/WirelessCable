@@ -9,6 +9,8 @@
  * 调用方据此把按钮置灰或给一句说明，而不是静默失败。
  */
 
+import { t } from './i18n';
+
 type HostReply = {
   id: string;
   ok: boolean;
@@ -64,6 +66,29 @@ export function isDesktop(): boolean {
  * 之前统一 15 秒，超时后 promise 已经被拒，对话框关掉时的回包就没人接，
  * 表现正是「选完文件点打开没反应」。这两类给 10 分钟。
  */
+/**
+ * 宿主返回的错误码 → 中文原文，再交给 t() 翻。
+ *
+ * 以前宿主直接回中文（"缺少路径"），英文界面下会原样弹出来。改成语义码，
+ * 翻译留在前端——宿主不必知道自己当前是什么语言。
+ */
+const HOST_ERRORS: Record<string, string> = {
+  missing_path: '缺少路径',
+  unknown_action: '未知动作',
+  unknown_window_action: '未知窗口动作',
+  scheme_not_allowed: '只允许 http/https',
+};
+
+function hostFailure(code: string | undefined, fallback: string): Error {
+  if (!code) {
+    return new Error(t(fallback));
+  }
+
+  const zh = HOST_ERRORS[code];
+  // 认不出来的码多半是宿主透传的系统异常消息，原样给出，别吞掉
+  return new Error(zh ? t(zh) : code);
+}
+
 const TIMEOUT_MS = 15_000;
 const PICKER_TIMEOUT_MS = 10 * 60_000;
 
@@ -74,7 +99,7 @@ export function host(
 ): Promise<HostReply> {
   const bridge = window.chrome?.webview;
   if (!bridge) {
-    return Promise.reject(new Error('只能在桌面窗口里使用'));
+    return Promise.reject(new Error(t('只能在桌面窗口里使用')));
   }
 
   ensureListener(bridge);
@@ -93,7 +118,7 @@ export function host(
 
     window.setTimeout(() => {
       if (pending.delete(id)) {
-        reject(new Error('桌面端没有响应'));
+        reject(new Error(t('桌面端没有响应')));
       }
     }, timeoutMs);
   });
@@ -103,7 +128,7 @@ export function host(
 export async function openPath(path: string): Promise<void> {
   const reply = await host('openPath', { path });
   if (!reply.ok) {
-    throw new Error(reply.error ?? '打不开这个路径');
+    throw hostFailure(reply.error, '打不开这个路径');
   }
 }
 
@@ -111,33 +136,33 @@ export async function openPath(path: string): Promise<void> {
 export async function openFile(path: string): Promise<void> {
   const reply = await host('openFile', { path });
   if (!reply.ok) {
-    throw new Error(reply.error ?? '打不开这个文件');
+    throw hostFailure(reply.error, '打不开这个文件');
   }
 }
 
 /** 选文件，返回绝对路径；用户取消时返回空数组。 */
-export async function pickFiles(title = '选择要发送的文件'): Promise<string[]> {
+export async function pickFiles(title = t('选择要发送的文件')): Promise<string[]> {
   const reply = await host('pickFiles', { title }, PICKER_TIMEOUT_MS);
   if (!reply.ok) {
     if (reply.error === 'cancelled') {
       return [];
     }
 
-    throw new Error(reply.error ?? '选文件失败');
+    throw hostFailure(reply.error, '选文件失败');
   }
 
   return reply.files ?? [];
 }
 
 /** 选目录，返回绝对路径；用户取消时返回 null。 */
-export async function pickFolder(title = '选择目录'): Promise<string | null> {
+export async function pickFolder(title = t('选择目录')): Promise<string | null> {
   const reply = await host('pickFolder', { title }, PICKER_TIMEOUT_MS);
   if (!reply.ok) {
     if (reply.error === 'cancelled') {
       return null;
     }
 
-    throw new Error(reply.error ?? '选目录失败');
+    throw hostFailure(reply.error, '选目录失败');
   }
 
   return reply.path ?? null;
@@ -146,7 +171,7 @@ export async function pickFolder(title = '选择目录'): Promise<string | null>
 export async function copyText(text: string): Promise<void> {
   const reply = await host('copyText', { text });
   if (!reply.ok) {
-    throw new Error(reply.error ?? '复制失败');
+    throw hostFailure(reply.error, '复制失败');
   }
 }
 

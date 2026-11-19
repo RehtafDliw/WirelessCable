@@ -1,3 +1,5 @@
+**中文** | [English](README.en.md)
+
 > **本仓库包含大量 AI 生成内容**，包括但不限于代码、`README.md`、`CONTRIBUTING.md` 等；
 > 文件内不再另附说明，请知悉。
 
@@ -6,6 +8,8 @@
 **一根无线数据线。** 手机和电脑在同一个局域网里互传文件、浏览对方目录，不走云、不插线。
 
 <sub>Android + Windows · 局域网直连 · 自签证书 + 指纹固定 · 无账号、无遥测</sub>
+
+<sub>English: [README.en.md](README.en.md) ｜ [User guide](docs/en/guide.md) — 手机在「设置 → 外观 → 语言」选（跟随系统 / 中文 / English），电脑在侧栏底部一键切换，都即时生效。</sub>
 
 ![桌面端首页](docs/screenshots/desktop-home.png)
 
@@ -82,8 +86,11 @@
 # 桌面端：单文件 exe + 便携目录（会先构建前端）
 bash scripts/build-desktop.sh
 
-# 安卓端：签名 release APK
+# 安卓端：debug 包（装机自测）
 bash scripts/build-android.sh
+
+# 安卓端：签名 release 包（需要 keys/ 与 keystore.properties）
+bash scripts/build-android.sh --release
 
 # 全部测试（xUnit + Android JVM 单测）
 bash scripts/test-all.sh
@@ -124,6 +131,7 @@ scripts/                        构建、测试、打包
 | --- | --- |
 | [`docs/使用指南.md`](docs/使用指南.md) | 终端用户手册：装、连、传、常见问题 |
 | [`docs/用户手册.md`](docs/用户手册.md) | 含实现细节的手册（排障用） |
+| [`docs/en/guide.md`](docs/en/guide.md) | 同一份使用指南的英文版 |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | 分层与关键决策 |
 
 ---

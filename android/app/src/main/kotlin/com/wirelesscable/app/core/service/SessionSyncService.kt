@@ -28,6 +28,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.wirelesscable.app.core.i18n.Str
 
 /**
  * 「与电脑保持连接」的前台服务。
@@ -151,7 +152,7 @@ class SessionSyncService : Service() {
             inbox.receiving != null ->
                 "正在接收「${inbox.receiving}」 ${(inbox.progress * 100).toInt()}%"
 
-            received != null -> "已接收「$received」到 下载/WirelessCable"
+            received != null -> Str.t("已接收「$received」到 下载/WirelessCable")
 
             inbox.blocked -> "需要「所有文件访问权」才能接收电脑发来的文件"
 
@@ -173,8 +174,8 @@ class SessionSyncService : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("与电脑保持连接")
-            .setContentText(text)
+            .setContentTitle(Str.t("与电脑保持连接"))
+            .setContentText(Str.t(text))
             .setSmallIcon(R.drawable.ic_stat_service)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
@@ -182,7 +183,7 @@ class SessionSyncService : Service() {
             .setSilent(true)
             .setShowWhen(false)
             .setContentIntent(openApp)
-            .addAction(0, "关闭", stop)
+            .addAction(0, Str.t("关闭"), stop)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
@@ -207,13 +208,13 @@ class SessionSyncService : Service() {
 
         if (inbox.lastReceived != null && inbox.lastReceivedAtMs > lastReceivedAtMs) {
             lastReceivedAtMs = inbox.lastReceivedAtMs
-            balloon("已接收「${inbox.lastReceived}」", "保存在 下载/WirelessCable")
+            balloon(Str.t("已接收「${inbox.lastReceived}」"), Str.t("保存在 下载/WirelessCable"))
             return
         }
 
         if (inbox.blocked && !lastBlockedShown) {
             lastBlockedShown = true
-            balloon("无法接收文件", "需要「所有文件访问权」")
+            balloon(Str.t("无法接收文件"), Str.t("需要「所有文件访问权」"))
             return
         }
         if (!inbox.blocked) {
@@ -223,7 +224,7 @@ class SessionSyncService : Service() {
         val error = SessionSyncEngine.state.value.lastError
         if (error != null && error != lastErrorShown) {
             lastErrorShown = error
-            balloon("连接断开", error)
+            balloon(Str.t("连接断开"), Str.t(error))
             return
         }
         if (error == null) {
@@ -270,8 +271,8 @@ class SessionSyncService : Service() {
         // 前台服务那条：降到 IMPORTANCE_MIN —— 不响、不弹、不占状态栏图标，
         // 只在通知栏最底下折叠着（Android 强制要求前台服务必须有一条通知）。
         manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, "后台连接", NotificationManager.IMPORTANCE_MIN).apply {
-                description = "息屏时仍与电脑保持连接；系统要求前台服务必须有一条通知，已降到最低"
+            NotificationChannel(CHANNEL_ID, Str.t("后台连接"), NotificationManager.IMPORTANCE_MIN).apply {
+                description = Str.t("息屏时仍与电脑保持连接；系统要求前台服务必须有一条通知，已降到最低")
                 setShowBadge(false)
                 setSound(null, null)
                 enableVibration(false)
@@ -280,8 +281,8 @@ class SessionSyncService : Service() {
 
         // 事件：heads-up 气球，5 秒自动消失
         manager.createNotificationChannel(
-            NotificationChannel(EVENT_CHANNEL_ID, "事件提醒", NotificationManager.IMPORTANCE_HIGH).apply {
-                description = "收到文件、连接断开等，弹一次，5 秒后自动消失"
+            NotificationChannel(EVENT_CHANNEL_ID, Str.t("事件提醒"), NotificationManager.IMPORTANCE_HIGH).apply {
+                description = Str.t("收到文件、连接断开等，弹一次，5 秒后自动消失")
                 setShowBadge(false)
                 setSound(null, null)
                 enableVibration(false)

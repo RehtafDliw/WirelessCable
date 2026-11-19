@@ -1,3 +1,4 @@
+import { t } from './i18n';
 /** 显示层的格式化。全部按中文习惯，取整规则与桌面端 WPF 版一致。 */
 
 export function formatBytes(bytes: number): string {
@@ -35,14 +36,14 @@ export function formatDuration(seconds: number): string {
   const minutes = Math.floor((total % 3600) / 60);
 
   if (hours > 0) {
-    return minutes > 0 ? `${hours} 小时 ${minutes} 分` : `${hours} 小时`;
+    return minutes > 0 ? t(`${hours} 小时 ${minutes} 分`) : t(`${hours} 小时`);
   }
 
   if (minutes > 0) {
-    return `${minutes} 分`;
+    return t(`${minutes} 分`);
   }
 
-  return `${total} 秒`;
+  return t(`${total} 秒`);
 }
 
 /** 时钟：今天只给 14:32，更早给 11-16 14:32。 */
@@ -69,32 +70,34 @@ export function formatClock(unixMs: number): string {
 /** 相对时间：刚刚 / N 分钟前 / N 小时前 / 昨天 21:40 / 11-14。 */
 export function formatAgo(unixMs: number): string {
   if (!unixMs) {
-    return '从未';
+    return t('从未');
   }
 
   const diff = Date.now() - unixMs;
   if (diff < 60_000) {
-    return '刚刚';
+    return t('刚刚');
   }
 
   if (diff < 3_600_000) {
-    return `${Math.floor(diff / 60_000)} 分钟前`;
+    return t(`${Math.floor(diff / 60_000)} 分钟前`);
   }
 
   const date = new Date(unixMs);
   const now = new Date();
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   if (unixMs >= startOfToday) {
-    return `${Math.floor(diff / 3_600_000)} 小时前`;
+    return t(`${Math.floor(diff / 3_600_000)} 小时前`);
   }
 
   if (unixMs >= startOfToday - 86_400_000) {
-    return `昨天 ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+    return t(`昨天 ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`);
   }
 
   return `${date.getMonth() + 1}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
+// 只存中文原文，**在调用时**才翻译：模块级常量只求值一次，
+// 放在这里调 t() 会导致启动后切语言时这一列不跟着变（截图里就是这么露的）。
 const STATE_TEXT: Record<string, string> = {
   waiting: '等待中',
   preparing: '准备中',
@@ -108,7 +111,7 @@ const STATE_TEXT: Record<string, string> = {
 };
 
 export function stateLabel(state: string): string {
-  return STATE_TEXT[state] ?? state;
+  return t(STATE_TEXT[state] ?? state);
 }
 
 const TERMINAL = new Set(['completed', 'cancelled']);
@@ -133,7 +136,7 @@ export function isInFlight(state: string): boolean {
 }
 
 export function directionLabel(direction: string): string {
-  return direction === 'upload' ? '手机 → 本机' : '本机 → 手机';
+  return direction === 'upload' ? t('手机 → 本机') : t('本机 → 手机');
 }
 
 /** 上传是手机发来的（我收到的），下载是本机发出去的（我发送的）。 */

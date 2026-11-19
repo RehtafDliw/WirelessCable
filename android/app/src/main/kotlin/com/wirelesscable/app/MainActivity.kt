@@ -20,6 +20,7 @@ import com.wirelesscable.app.core.sync.SessionSyncEngine
 import com.wirelesscable.app.ui.AppRoot
 import com.wirelesscable.app.ui.ShareDraft
 import com.wirelesscable.app.ui.theme.WirelessCableTheme
+import com.wirelesscable.app.core.i18n.LangState
 import com.wirelesscable.app.ui.theme.WcThemeState
 import com.wirelesscable.app.core.files.RootGrantManager
 import com.wirelesscable.app.core.transfer.TransferItem
@@ -245,6 +246,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // 主题偏好在建界面之前读出来，避免先按浅色铺一帧再切深色
         WcThemeState.load(this)
+        LangState.load(this)
 
         setContent {
             WirelessCableTheme {

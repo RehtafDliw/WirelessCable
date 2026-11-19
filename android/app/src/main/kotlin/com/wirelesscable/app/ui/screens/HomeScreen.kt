@@ -49,15 +49,17 @@ import com.wirelesscable.app.vm.PairingUiState
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import com.wirelesscable.app.core.i18n.Str
+import com.wirelesscable.app.ui.components.deviceLabel
 
 /**
  * 首页。
  *
  * 只放四块（2026-11-16 裁定）：连接状态、我的设备、传输中、发送文件 / 扫码配对。
  * **不做仪表盘** —— 没有「进行中 N」「今日完成 M」这类计数块：用户问的是
- * "现在连着谁、还在传什么"，不是看统计报表。
+ * 现在连着谁、还在传什么，不是看统计报表。
  *
- * 退出应用在右上角（红色电源图标），不在页面底部：它是"我不用了"的出口，
+ * 退出应用在右上角（红色电源图标），不在页面底部：它是我不用了的出口，
  * 放在滚动区末尾意味着要滑到底才找得到，而且每屏都占一行。
  */
 @Composable
@@ -103,20 +105,20 @@ fun HomeScreen(
 
             // ---------------- 我的设备 ----------------
             WcSectionHeader(
-                title = "我的设备",
-                hint = if (pairing.scanning) "停止扫描" else "扫描",
+                title = Str.t("我的设备"),
+                hint = if (pairing.scanning) Str.t("停止扫描") else Str.t("扫描"),
                 onHintClick = onToggleScan,
             )
 
             if (pairing.pairedDevices.isEmpty()) {
                 WcCard {
                     Text(
-                        text = "还没有配对电脑",
+                        text = Str.t("还没有配对电脑"),
                         fontSize = WcType.bodySize,
                         color = WcColors.Text,
                     )
                     Spacer(Modifier.height(WcSpace.s1))
-                    WcLinkButton(text = "扫码配对", onClick = onOpenScanner)
+                    WcLinkButton(text = Str.t("扫码配对"), onClick = onOpenScanner)
                 }
             } else {
                 WcCardList {
@@ -124,11 +126,11 @@ fun HomeScreen(
                         if (index > 0) WcRowDivider()
                         val isCurrent = pairing.isConnected && pairing.sessionDeviceId == device.deviceId
                         DeviceRow(
-                            name = device.displayName,
+                            name = deviceLabel(device.displayName, device.deviceId),
                             meta = when {
-                                isCurrent -> "当前设备"
-                                pairing.sessionState == "connecting" -> "连接中"
-                                else -> "上次连接 " + agoText(device.lastSeenUtc)
+                                isCurrent -> Str.t("当前设备")
+                                pairing.sessionState == "connecting" -> Str.t("连接中")
+                                else -> Str.t("上次连接 ") + agoText(device.lastSeenUtc)
                             },
                             connected = isCurrent,
                             connecting = pairing.sessionState == "connecting",
@@ -139,8 +141,8 @@ fun HomeScreen(
 
             // 附近的电脑：只在扫描或有结果时出现，平时不占位
             if (pairing.scanning || pairing.discovered.isNotEmpty()) {
-                WcSectionHeader(title = "附近的电脑", hint = if (pairing.scanning) "扫描中" else null)
-                // 已经连着的那台不再出现在"附近的电脑"里：它已经在上面标着"已连接"，
+                WcSectionHeader(title = Str.t("附近的电脑"), hint = if (pairing.scanning) Str.t("扫描中") else null)
+                // 已经连着的那台不再出现在附近的电脑里：它已经在上面标着已连接，
                 // 重复列出只会让人以为还有第二台
                 val nearby = pairing.discovered.filterNot { server ->
                     pairing.isConnected && pairing.sessionDeviceId == server.deviceId
@@ -149,7 +151,7 @@ fun HomeScreen(
                 if (nearby.isEmpty()) {
                     WcCard {
                         Text(
-                            text = "确认手机与电脑在同一 Wi-Fi",
+                            text = Str.t("确认手机与电脑在同一 Wi-Fi"),
                             fontSize = WcType.labelSize,
                             color = WcColors.Muted,
                         )
@@ -178,16 +180,17 @@ fun HomeScreen(
                 Spacer(Modifier.height(WcSpace.s2))
                 if (pairing.tokenMissing) {
                     // 令牌没了，重试永远失败——直接给唯一的出口，别让用户去猜
-                    WcLinkButton(text = "重新配对", onClick = onRePair)
+                    WcLinkButton(text = Str.t("重新配对"), onClick = onRePair)
                 } else {
                     WcLinkButton(
-                        text = if (pairing.sessionState == "connecting") "连接中…" else "重连",
+                        text = if (pairing.sessionState == "connecting") Str.t("连接中…") else Str.t("重连"),
                         onClick = onRetrySession,
                     )
                 }
             }
 
-            pairing.message?.let { message ->
+            pairing.message?.let { raw ->
+                val message = Str.t(raw)
                 Spacer(Modifier.height(WcSpace.s2))
                 Text(
                     text = message,
@@ -197,17 +200,17 @@ fun HomeScreen(
             }
 
             // ---------------- 传输中 ----------------
-            WcSectionHeader(title = "传输中", hint = "全部", onHintClick = onOpenTransfers)
+            WcSectionHeader(title = Str.t("传输中"), hint = Str.t("全部"), onHintClick = onOpenTransfers)
 
             if (activeRows.isEmpty()) {
                 Text(
-                    text = "没有正在进行的传输",
+                    text = Str.t("没有正在进行的传输"),
                     fontSize = WcType.labelSize,
                     color = WcColors.Muted,
                     modifier = Modifier.padding(vertical = WcSpace.s2),
                 )
             } else {
-                // 只放两条：首页是"扫一眼"的地方，多了会把快捷动作挤下去
+                // 只放两条：首页是扫一眼的地方，多了会把快捷动作挤下去
                 activeRows.take(2).forEach { row ->
                     when (row) {
                         is TransferRow.Single -> TransferSummaryCard(
@@ -234,16 +237,16 @@ fun HomeScreen(
             }
 
             // ---------------- 快捷动作 ----------------
-            // 两两一组：上面是"往电脑送东西"，下面是"连上谁"
+            // 两两一组：上面是往电脑送东西，下面是连上谁
             Spacer(Modifier.height(WcSpace.s1))
             Row(horizontalArrangement = Arrangement.spacedBy(WcSpace.s2)) {
                 PrimaryAction(
-                    text = "发送文件",
+                    text = Str.t("发送文件"),
                     onClick = onSendFiles,
                     modifier = Modifier.weight(1f),
                 )
                 SecondaryAction(
-                    text = "发送应用",
+                    text = Str.t("发送应用"),
                     onClick = onSendApps,
                     modifier = Modifier.weight(1f),
                 )
@@ -253,12 +256,12 @@ fun HomeScreen(
 
             Row(horizontalArrangement = Arrangement.spacedBy(WcSpace.s2)) {
                 SecondaryAction(
-                    text = "扫码配对",
+                    text = Str.t("扫码配对"),
                     onClick = onOpenScanner,
                     modifier = Modifier.weight(1f),
                 )
                 SecondaryAction(
-                    text = "当面直连",
+                    text = Str.t("当面直连"),
                     onClick = onOpenDirect,
                     modifier = Modifier.weight(1f),
                 )
@@ -276,13 +279,14 @@ private fun PairingRequestCard(state: PairingUiState, onCancel: () -> Unit) {
     WcCard {
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = state.activeServer?.displayName ?: "未知设备",
+                text = state.activeServer?.let { deviceLabel(it.displayName, it.deviceId) }
+                    ?: Str.t("未知设备"),
                 fontSize = WcType.h3Size,
                 fontWeight = FontWeight.SemiBold,
                 color = WcColors.Text,
                 modifier = Modifier.weight(1f),
             )
-            StatusPill(text = "等待确认", tone = Tone.Idle)
+            StatusPill(text = Str.t("等待确认"), tone = Tone.Idle)
         }
         Spacer(Modifier.height(WcSpace.s2))
         Text(
@@ -292,9 +296,9 @@ private fun PairingRequestCard(state: PairingUiState, onCancel: () -> Unit) {
             color = WcColors.Text,
         )
         Spacer(Modifier.height(WcSpace.s1))
-        Text(text = "在电脑上点「允许」", fontSize = WcType.labelSize, color = WcColors.Muted)
+        Text(text = Str.t("在电脑上点「允许」"), fontSize = WcType.labelSize, color = WcColors.Muted)
         Spacer(Modifier.height(WcSpace.s2))
-        WcLinkButton(text = "取消", onClick = onCancel, color = WcColors.Muted)
+        WcLinkButton(text = Str.t("取消"), onClick = onCancel, color = WcColors.Muted)
     }
 }
 
@@ -303,12 +307,12 @@ private fun BackgroundWarningCard(onAllow: () -> Unit) {
     WcCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = "息屏后会连不上",
+                text = Str.t("息屏后会连不上"),
                 fontSize = WcType.bodySize,
                 color = WcColors.Error,
                 modifier = Modifier.weight(1f),
             )
-            WcLinkButton(text = "允许后台运行", onClick = onAllow, color = WcColors.Accent)
+            WcLinkButton(text = Str.t("允许后台运行"), onClick = onAllow, color = WcColors.Accent)
         }
     }
 }
@@ -362,9 +366,9 @@ private fun DeviceRow(
             )
         }
         when {
-            connected -> StatusPill(text = "已连接", tone = Tone.Ok)
-            connecting -> StatusPill(text = "连接中", tone = Tone.Idle)
-            else -> StatusPill(text = "断开", tone = Tone.Idle)
+            connected -> StatusPill(text = Str.t("已连接"), tone = Tone.Ok)
+            connecting -> StatusPill(text = Str.t("连接中"), tone = Tone.Idle)
+            else -> StatusPill(text = Str.t("断开"), tone = Tone.Idle)
         }
     }
 }
@@ -385,7 +389,7 @@ private fun DiscoveredRow(
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = server.displayName,
+                text = deviceLabel(server.displayName, server.deviceId),
                 fontSize = 14.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = WcColors.Text,
@@ -393,16 +397,16 @@ private fun DiscoveredRow(
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = if (paired) "已配对" else "未配对",
+                text = if (paired) Str.t("已配对") else Str.t("未配对"),
                 fontSize = WcType.captionSize,
                 color = WcColors.Muted,
             )
         }
         if (current) {
-            StatusPill(text = "已连接", tone = Tone.Ok)
+            StatusPill(text = Str.t("已连接"), tone = Tone.Ok)
         } else {
             Text(
-                text = if (paired) "连接" else "配对",
+                text = if (paired) Str.t("连接") else Str.t("配对"),
                 fontSize = 13.sp,
                 color = WcColors.Accent,
                 modifier = Modifier
@@ -471,13 +475,13 @@ private fun TransferSummaryCard(
 
 /** 单条的第二行：方向 · 速度。 */
 private fun TransferItem.directionLine(): String =
-    (if (isUpload) "本机 → $deviceName" else "$deviceName → 本机") +
+    (if (isUpload) Str.t("本机 → $deviceName") else Str.t("$deviceName → 本机")) +
         " · " + TransferFormat.speed(bytesPerSecond)
 
 /** 整批的第二行：方向 · 已完成几个 · 速度。 */
 private fun TransferRow.Batch.homeSubtitle(): String {
-    val direction = if (isUpload) "本机 → ${lead.deviceName}" else "${lead.deviceName} → 本机"
-    val progressText = "$completedCount/$fileCount 个文件"
+    val direction = if (isUpload) Str.t("本机 → ${lead.deviceName}") else Str.t("${lead.deviceName} → 本机")
+    val progressText = Str.t("$completedCount/$fileCount 个文件")
     val speed = if (isActive && !allPaused) TransferFormat.speed(bytesPerSecond) else null
     return (listOf(direction, progressText) + listOfNotNull(speed)).joinToString(" · ")
 }
@@ -529,10 +533,10 @@ private fun agoText(epochMillis: Long): String {
     if (epochMillis <= 0L) return "—"
     val delta = System.currentTimeMillis() - epochMillis
     return when {
-        delta < 60_000L -> "刚刚"
-        delta < 3_600_000L -> "${delta / 60_000L} 分钟前"
-        delta < 86_400_000L -> "${delta / 3_600_000L} 小时前"
-        delta < 7 * 86_400_000L -> "${delta / 86_400_000L} 天前"
+        delta < 60_000L -> Str.t("刚刚")
+        delta < 3_600_000L -> Str.t("${delta / 60_000L} 分钟前")
+        delta < 86_400_000L -> Str.t("${delta / 3_600_000L} 小时前")
+        delta < 7 * 86_400_000L -> Str.t("${delta / 86_400_000L} 天前")
         else -> SimpleDateFormat("MM-dd", Locale.getDefault()).format(Date(epochMillis))
     }
 }

@@ -56,16 +56,17 @@ import com.wirelesscable.app.ui.theme.WcType
 import com.wirelesscable.app.ui.components.WcLinkButton
 import com.wirelesscable.app.ui.components.WcPrimaryButton
 import com.wirelesscable.app.vm.DirectViewModel
+import com.wirelesscable.app.core.i18n.Str
 
 /**
  * 两机直连页。
  *
- * 结构按"先选角色、再连、连上才给动作"排：
+ * 结构按先选角色、再连、连上才给动作排：
  * 1. 没开始时只有两个按钮：**对方扫我** / **我扫对方**；
  * 2. 出码后只有二维码（对方扫它），不显示发送按钮——还没连上，发了也没人接；
  * 3. 连上之后才出现「已连接 · 对方是谁」和「发送文件给对方」。
  *
- * 会话是一次性的：断开、退出、换网络都要重新扫码，所以这一页永远只有"当前这一次"。
+ * 会话是一次性的：断开、退出、换网络都要重新扫码，所以这一页永远只有当前这一次。
  */
 @Composable
 fun DirectScreen(
@@ -103,7 +104,7 @@ fun DirectScreen(
         ActivityResultContracts.OpenDocument(),
     ) { uri -> uri?.let(onSend) }
 
-    // 应用选择器：出码方是"加进共享清单"，扫码方是"直接推过去"
+    // 应用选择器：出码方是加进共享清单，扫码方是直接推过去
     var appPickerTarget by remember { mutableStateOf<AppPickerTarget?>(null) }
     if (appPickerTarget != null) {
         AppPickerDialog(
@@ -132,7 +133,7 @@ fun DirectScreen(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) { result ->
         // 不看返回的 map，直接查真实授权状态：系统和 ROM 认的权限不完全一样，
-        // 用 `any`/`all` 判会得出"有权限但实际调不动"的错误结论。
+        // 用 `any`/`all` 判会得出有权限但实际调不动的错误结论。
         val ok = HotspotPermissions.canUseHotspot(context)
         DirectLog.i(
             "开热点权限申请结果 result=$result 实际 ${HotspotPermissions.describe(context)} " +
@@ -164,11 +165,11 @@ fun DirectScreen(
     BackHandler(enabled = true) { onBack() }
 
     Column(modifier = Modifier.fillMaxWidth()) {
-        WcTopBar(title = "当面直连") {
+        WcTopBar(title = Str.t("当面直连")) {
             WcIconAction(
                 icon = CloseIcon,
                 onClick = onBack,
-                contentDescription = "关闭",
+                contentDescription = Str.t("关闭"),
             )
         }
 
@@ -207,7 +208,7 @@ fun DirectScreen(
         }
 
         // 权限被拒（或系统不再弹框）：给一个真正能解决问题的出口。
-        // 只写一行"没有权限"等于把用户扔在原地——13+ 上拒绝两次之后系统就不会再弹了。
+        // 只写一行没有权限等于把用户扔在原地——13+ 上拒绝两次之后系统就不会再弹了。
         state.permissionIssue?.let { issue ->
             Spacer(Modifier.height(12.dp))
             PermissionCard(
@@ -236,7 +237,8 @@ fun DirectScreen(
             )
         }
 
-        state.message?.let { message ->
+        state.message?.let { raw ->
+            val message = Str.t(raw)
             Spacer(Modifier.height(12.dp))
             Text(text = message, fontSize = WcType.labelSize, color = WcColors.Muted)
         }
@@ -250,7 +252,7 @@ fun DirectScreen(
  * 缺少热点权限时的出口。
  *
  * 必须有「去设置」这一条：Android 13 起，同一个权限被拒绝两次之后系统**不会再弹框**，
- * 无论代码里怎么 `launch()` 都是立刻返回 denied —— 界面上看起来就是"点了没反应"。
+ * 无论代码里怎么 `launch()` 都是立刻返回 denied —— 界面上看起来就是点了没反应。
  */
 @Composable
 private fun PermissionCard(
@@ -259,21 +261,21 @@ private fun PermissionCard(
     onRetry: () -> Unit,
 ) {
     WcCard {
-        Text(text = "缺少热点权限", fontSize = 13.sp, color = WcColors.Text)
+        Text(text = Str.t("缺少热点权限"), fontSize = 13.sp, color = WcColors.Text)
         Spacer(Modifier.height(6.dp))
         Text(
-            text = "$message。系统没弹授权框时，多半是之前拒绝过两次；在应用设置里打开后回来点重试。",
+            text = Str.t("$message。系统没弹授权框时，多半是之前拒绝过两次；在应用设置里打开后回来点重试。"),
             fontSize = 12.5.sp,
             color = WcColors.Muted,
         )
         Spacer(Modifier.height(10.dp))
         WcPrimaryButton(
-            text = "打开应用设置",
+            text = Str.t("打开应用设置"),
             onClick = onOpenSettings,
             modifier = Modifier.fillMaxWidth(),
         )
         Spacer(Modifier.height(6.dp))
-        WcLinkButton(text = "重试", onClick = onRetry, color = WcColors.Accent)
+        WcLinkButton(text = Str.t("重试"), onClick = onRetry, color = WcColors.Accent)
     }
 }
 
@@ -292,25 +294,25 @@ private fun HotspotFallbackCard(
 ) {
     WcCard {
         Text(
-            text = if (waiting) "等待你连上对方热点" else "自动连对方热点没成功",
+            text = if (waiting) Str.t("等待你连上对方热点") else Str.t("自动连对方热点没成功"),
             fontSize = 13.sp,
             color = WcColors.Text,
         )
         Spacer(Modifier.height(6.dp))
         Text(
-            text = "在系统 Wi-Fi 里手动连接「${hint.ssid}」，密码：${hint.passphrase}" +
-                if (waiting) "。连上后这里会自动继续，不用切回来。" else "",
+            text = Str.t("在系统 Wi-Fi 里手动连接「${hint.ssid}」，密码：${hint.passphrase}") +
+                if (waiting) Str.t("。连上后这里会自动继续，不用切回来。") else "",
             fontSize = 12.5.sp,
             color = WcColors.Muted,
         )
         Spacer(Modifier.height(10.dp))
         WcPrimaryButton(
-            text = "打开 Wi-Fi 设置",
+            text = Str.t("打开 Wi-Fi 设置"),
             onClick = onOpenSettings,
             modifier = Modifier.fillMaxWidth(),
         )
         Spacer(Modifier.height(6.dp))
-        WcLinkButton(text = "我已连上，重试", onClick = onRetry, color = WcColors.Accent)
+        WcLinkButton(text = Str.t("我已连上，重试"), onClick = onRetry, color = WcColors.Accent)
     }
 }
 
@@ -322,7 +324,7 @@ private fun IdleContent(
     onToggleHotspot: (Boolean) -> Unit,
 ) {
     WcPrimaryButton(
-        text = if (state.busy) "正在准备…" else "对方扫我",
+        text = if (state.busy) Str.t("正在准备…") else Str.t("对方扫我"),
         onClick = onHost,
         modifier = Modifier.fillMaxWidth(),
         enabled = !state.busy,
@@ -331,7 +333,7 @@ private fun IdleContent(
     Spacer(Modifier.height(10.dp))
 
     WcPrimaryButton(
-        text = "我扫对方",
+        text = Str.t("我扫对方"),
         onClick = onScan,
         modifier = Modifier.fillMaxWidth(),
         enabled = !state.busy,
@@ -346,10 +348,10 @@ private fun IdleContent(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(text = "用热点直连", fontSize = 14.sp, color = WcColors.Text)
+                Text(text = Str.t("用热点直连"), fontSize = 14.sp, color = WcColors.Text)
                 Spacer(Modifier.height(3.dp))
                 Text(
-                    text = "当前 Wi-Fi 传不动时打开。对方连不上会改用你开的热点。",
+                    text = Str.t("当前 Wi-Fi 传不动时打开。对方连不上会改用你开的热点。"),
                     fontSize = 12.sp,
                     color = WcColors.Muted,
                 )
@@ -371,7 +373,7 @@ private fun HostingContent(
     onOpenReceived: (DirectSession.ReceivedFile) -> Unit,
     onStop: () -> Unit,
 ) {
-    WcSectionHeader(if (state.connected) "已连接" else "等对方扫码")
+    WcSectionHeader(if (state.connected) Str.t("已连接") else Str.t("等对方扫码"))
 
     WcCard {
         if (!state.connected) {
@@ -381,7 +383,7 @@ private fun HostingContent(
                 Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                     Image(
                         bitmap = bitmap.asImageBitmap(),
-                        contentDescription = "直连二维码",
+                        contentDescription = Str.t("直连二维码"),
                         modifier = Modifier
                             .size(220.dp)
                             .clip(RoundedCornerShape(8.dp))
@@ -391,21 +393,21 @@ private fun HostingContent(
 
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    text = "请对方点「我扫对方」扫这张图。二维码 5 分钟内有效。",
+                    text = Str.t("请对方点「我扫对方」扫这张图。二维码 5 分钟内有效。"),
                     fontSize = 12.sp,
                     color = WcColors.Muted,
                 )
             }
         } else {
-            DetailRow("对方", "已接入")
-            DetailRow("已发送", "${state.shared.size} 个文件")
+            DetailRow(Str.t("对方"), Str.t("已接入"))
+            DetailRow(Str.t("已发送"), Str.t("${state.shared.size} 个文件"))
 
             if (state.sendingName != null) {
                 Spacer(Modifier.height(10.dp))
                 Text(
                     // 出码方既会发（对方拉共享文件）也会收（对方推文件给我），
                     // 两个方向都走这一块 UI，文案必须分开（1.5.64）
-                    text = (if (state.transferIncoming) "正在接收：" else "正在发送：") + state.sendingName,
+                    text = (if (state.transferIncoming) Str.t("正在接收：") else Str.t("正在发送：")) + state.sendingName,
                     fontSize = 12.5.sp,
                     color = WcColors.Muted,
                 )
@@ -424,14 +426,14 @@ private fun HostingContent(
 
             Spacer(Modifier.height(12.dp))
             WcPrimaryButton(
-                text = "发送文件给对方",
+                text = Str.t("发送文件给对方"),
                 onClick = onPickShared,
                 modifier = Modifier.fillMaxWidth(),
                 enabled = !state.busy,
             )
             Spacer(Modifier.height(8.dp))
             WcPrimaryButton(
-                text = "发送应用给对方",
+                text = Str.t("发送应用给对方"),
                 onClick = onPickApps,
                 modifier = Modifier.fillMaxWidth(),
                 enabled = !state.busy,
@@ -440,20 +442,20 @@ private fun HostingContent(
             Spacer(Modifier.height(6.dp))
             Text(
                 // 出码方是服务端，没有反向连接：文件先登记进共享清单，
-                // 对方点下载才真正开始传。不写这句，用户会以为"点了没反应"。
-                text = "对方在列表里点「下载」后才开始传；应用会把安装包一起发过去。",
+                // 对方点下载才真正开始传。不写这句，用户会以为点了没反应。
+                text = Str.t("对方在列表里点「下载」后才开始传；应用会把安装包一起发过去。"),
                 fontSize = 12.sp,
                 color = WcColors.Muted,
             )
         }
 
         Spacer(Modifier.height(12.dp))
-        WcLinkButton(text = "结束会话", onClick = onStop, color = WcColors.Muted)
+        WcLinkButton(text = Str.t("结束会话"), onClick = onStop, color = WcColors.Muted)
     }
 
     if (state.shared.isNotEmpty()) {
         Spacer(Modifier.height(14.dp))
-        WcSectionHeader("已发送给对方")
+        WcSectionHeader(Str.t("已发送给对方"))
         WcCard {
             state.shared.forEach { file ->
                 Text(
@@ -469,7 +471,7 @@ private fun HostingContent(
     val plainReceived = state.received.filter { it.group == null }
     if (plainReceived.isNotEmpty()) {
         Spacer(Modifier.height(14.dp))
-        WcSectionHeader("对方发来的文件")
+        WcSectionHeader(Str.t("对方发来的文件"))
         WcCard {
             plainReceived.forEach { file ->
                 // 点一行就用系统默认应用打开——收到的东西本来就该能直接看
@@ -493,7 +495,7 @@ private fun HostingContent(
 
     if (receivedApps.isNotEmpty()) {
         Spacer(Modifier.height(14.dp))
-        WcSectionHeader("收到的应用")
+        WcSectionHeader(Str.t("收到的应用"))
 
         receivedApps.forEach { (group, files) ->
             WcCard {
@@ -508,14 +510,14 @@ private fun HostingContent(
                             color = WcColors.Text,
                         )
                         Text(
-                            text = "${files.size} 个安装包 · ${formatSize(files.sumOf { it.sizeBytes })}",
+                            text = Str.t("${files.size} 个安装包 · ${formatSize(files.sumOf { it.sizeBytes })}"),
                             fontSize = 11.5.sp,
                             color = WcColors.Muted,
                         )
                     }
 
                     Text(
-                        text = "安装",
+                        text = Str.t("安装"),
                         fontSize = 13.sp,
                         color = WcColors.Accent,
                         modifier = Modifier
@@ -536,33 +538,33 @@ private fun HostingContent(
  */
 private fun appLabelOf(names: List<String>): String {
     val base = names.firstOrNull { !it.contains("-part") } ?: names.firstOrNull().orEmpty()
-    return base.removeSuffix(".apk").ifBlank { "应用" }
+    return base.removeSuffix(".apk").ifBlank { Str.t("应用") }
 }
 
 @Composable
-/** 链路一行：说清"这条路能跑多快"。慢的时候直接给建议，别让用户对着进度条猜。 */
+/** 链路一行：说清这条路能跑多快。慢的时候直接给建议，别让用户对着进度条猜。 */
 private fun linkText(state: DirectViewModel.State): String {
-    // 走的是哪条路要写出来：以前界面只说"多快"，用户根本不知道有没有走热点（1.5.51）
-    val path = if (state.viaHotspot) "热点 · " else ""
+    // 走的是哪条路要写出来：以前界面只说多快，用户根本不知道有没有走热点（1.5.51）
+    val path = if (state.viaHotspot) Str.t("热点 · ") else ""
 
     if (state.linkMeasuring) {
-        return "${path}测速中…"
+        return Str.t("${path}测速中…")
     }
 
     if (state.linkFailed) {
-        return "${path}不通（256 KB 都收不到）"
+        return Str.t("${path}不通（256 KB 都收不到）")
     }
 
-    val speed = state.linkBytesPerSecond ?: return if (state.viaHotspot) "热点" else "未测"
+    val speed = state.linkBytesPerSecond ?: return if (state.viaHotspot) Str.t("热点") else Str.t("未测")
     val text = "$path${formatSize(speed)}/s"
 
-    // 对方的码里已经带了热点，就别再劝他"开热点"——那会让人以为开关没生效
+    // 对方的码里已经带了热点，就别再劝他开热点——那会让人以为开关没生效
     val hotspotReady = state.peerHasHotspot || state.viaHotspot
 
     return when {
-        speed < 200 * 1024 && hotspotReady -> "$text（很慢）"
-        speed < 200 * 1024 -> "$text（很慢，建议让对方打开「用热点直连」）"
-        speed < 1024 * 1024 -> "$text（偏慢）"
+        speed < 200 * 1024 && hotspotReady -> Str.t("$text（很慢）")
+        speed < 200 * 1024 -> Str.t("$text（很慢，建议让对方打开「用热点直连」）")
+        speed < 1024 * 1024 -> Str.t("$text（偏慢）")
         else -> text
     }
 }
@@ -576,16 +578,16 @@ private fun JoinedContent(
     onInstallPeerApp: (String) -> Unit,
     onLeave: () -> Unit,
 ) {
-    WcSectionHeader("已连接")
+    WcSectionHeader(Str.t("已连接"))
 
     WcCard {
-        DetailRow("对方", state.peerName)
-        DetailRow("对方文件", "${state.peerFiles.size} 个")
-        DetailRow("链路", linkText(state))
+        DetailRow(Str.t("对方"), state.peerName)
+        DetailRow(Str.t("对方文件"), Str.t("${state.peerFiles.size} 个"))
+        DetailRow(Str.t("链路"), linkText(state))
 
         state.sendingName?.let {
             Spacer(Modifier.height(10.dp))
-            Text(text = "正在传：$it", fontSize = 12.5.sp, color = WcColors.Muted)
+            Text(text = Str.t("正在传：$it"), fontSize = 12.5.sp, color = WcColors.Muted)
             Spacer(Modifier.height(4.dp))
             LinearProgressIndicator(
                 progress = { state.progress },
@@ -595,7 +597,7 @@ private fun JoinedContent(
             Text(
                 // 断流时进度条不动，用户只能猜是不是死了；换一句话告诉他还在重试（1.5.48）
                 text = if (state.stalled) {
-                    "链路卡住，正在重试…"
+                    Str.t("链路卡住，正在重试…")
                 } else {
                     "${formatSize(state.sentBytes)} / ${formatSize(state.totalBytes)}"
                 },
@@ -606,21 +608,21 @@ private fun JoinedContent(
 
         Spacer(Modifier.height(12.dp))
         WcPrimaryButton(
-            text = "发送文件给对方",
+            text = Str.t("发送文件给对方"),
             onClick = onPickSend,
             modifier = Modifier.fillMaxWidth(),
             enabled = !state.busy,
         )
         Spacer(Modifier.height(8.dp))
         WcPrimaryButton(
-            text = "发送应用给对方",
+            text = Str.t("发送应用给对方"),
             onClick = onPickApps,
             modifier = Modifier.fillMaxWidth(),
             enabled = !state.busy,
             soft = true,
         )
         Spacer(Modifier.height(8.dp))
-        WcLinkButton(text = "断开", onClick = onLeave, color = WcColors.Muted)
+        WcLinkButton(text = Str.t("断开"), onClick = onLeave, color = WcColors.Muted)
     }
 
     Spacer(Modifier.height(14.dp))
@@ -629,14 +631,14 @@ private fun JoinedContent(
     val peerApps = state.peerFiles.filter { it.group != null }.groupBy { it.group!! }
 
     if (state.peerFiles.isEmpty()) {
-        WcSectionHeader("对方还没有文件")
+        WcSectionHeader(Str.t("对方还没有文件"))
         Text(
-            text = "对方发送后会出现在这里，不用重连。",
+            text = Str.t("对方发送后会出现在这里，不用重连。"),
             fontSize = 12.5.sp,
             color = WcColors.Muted,
         )
     } else if (plainPeer.isNotEmpty()) {
-        WcSectionHeader("对方发来的文件")
+        WcSectionHeader(Str.t("对方发来的文件"))
         plainPeer.forEach { file ->
             WcCard {
                 Row(
@@ -653,7 +655,7 @@ private fun JoinedContent(
                     }
 
                     Text(
-                        text = if (state.downloaded.contains(file.id)) "已下载" else "下载",
+                        text = if (state.downloaded.contains(file.id)) Str.t("已下载") else Str.t("下载"),
                         fontSize = 13.sp,
                         color = if (state.downloaded.contains(file.id)) WcColors.Muted else WcColors.Accent,
                         modifier = Modifier.clickable(enabled = !state.busy && !state.downloaded.contains(file.id)) {
@@ -668,7 +670,7 @@ private fun JoinedContent(
 
     if (peerApps.isNotEmpty()) {
         Spacer(Modifier.height(14.dp))
-        WcSectionHeader("对方发来的应用")
+        WcSectionHeader(Str.t("对方发来的应用"))
 
         peerApps.forEach { (group, files) ->
             val allDownloaded = files.all { state.downloaded.contains(it.id) }
@@ -686,14 +688,14 @@ private fun JoinedContent(
                             color = WcColors.Text,
                         )
                         Text(
-                            text = "${files.size} 个安装包 · ${formatSize(files.sumOf { it.sizeBytes })}",
+                            text = Str.t("${files.size} 个安装包 · ${formatSize(files.sumOf { it.sizeBytes })}"),
                             fontSize = 11.5.sp,
                             color = WcColors.Muted,
                         )
                     }
 
                     Text(
-                        text = if (allDownloaded) "安装" else "下载并安装",
+                        text = if (allDownloaded) Str.t("安装") else Str.t("下载并安装"),
                         fontSize = 13.sp,
                         color = if (allDownloaded) WcColors.Success else WcColors.Accent,
                         modifier = Modifier

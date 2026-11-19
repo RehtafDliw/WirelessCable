@@ -13,6 +13,7 @@ import {
   type TransferDto,
 } from './api';
 import { useApi } from './useApi';
+import { t } from './i18n';
 import {
   copyText,
   isDesktop,
@@ -154,7 +155,7 @@ export function HomePage({
   onShowQr: () => void;
   /** 打开某台手机的文件浏览。 */
   onVisit: (deviceId: string) => void;
-  /** 排障：?sendtest=N 自动连发 N 次，复现"第二次选文件没反应" */
+  /** 排障：?sendtest=N 自动连发 N 次，复现「第二次选文件没反应」的路径 */
   autoSend?: number;
 }) {
   const status = useApi<Status>('/status', 3000);
@@ -174,12 +175,12 @@ export function HomePage({
     action.run(async () => {
       await api.post(`/devices/${device.deviceId}/session`, { paused: !device.sessionPaused });
       devices.reload();
-      return device.sessionPaused ? `已连接 ${device.name}` : `已断开 ${device.name}`;
+      return device.sessionPaused ? t(`已连接 ${device.name}`) : t(`已断开 ${device.name}`);
     }, undefined);
 
   const sendTo = async (target: PairedDevice, paths: string[]): Promise<string> => {
     // 对话框关掉到任务建好之间有一小段空窗：先给一句，避免"点完没反应"的错觉
-    action.setNotice(`已选择 ${paths.length} 个文件，正在创建任务…`);
+    action.setNotice(t(`已选择 ${paths.length} 个文件，正在创建任务…`));
 
     const result = await api.post<{ created: string[]; failed: string[] }>('/transfers/send', {
       deviceId: target.deviceId,
@@ -190,13 +191,13 @@ export function HomePage({
       throw new Error(result.failed[0]);
     }
 
-    return `已交给 ${target.name}：${result.created.length} 个文件`;
+    return t(`已交给 ${target.name}：${result.created.length} 个文件`);
   };
 
   const sendFiles = () =>
     action.run(async () => {
       if (online.length === 0) {
-        throw new Error('没有在线设备，先在手机上连上这台电脑');
+        throw new Error(t('没有在线设备，先在手机上连上这台电脑'));
       }
 
       const paths = await pickFiles();
@@ -211,7 +212,7 @@ export function HomePage({
       }
 
       setPendingSend(paths);
-      return `选了 ${paths.length} 个文件，选择要发给哪台设备`;
+      return t(`选了 ${paths.length} 个文件，选择要发给哪台设备`);
     }, undefined);
 
   // 排障用：自动按顺序触发 N 次发送（每次都会弹系统选文件框）。
@@ -243,45 +244,45 @@ export function HomePage({
       {/* 顶行：已连接设备 + 连接信息长磁贴 */}
       <div className="wc-home__top">
         <Stat
-          label="已连接设备"
+          label={t('已连接设备')}
           value={devices.data?.stats.online ?? 0}
-          hint={online.length > 0 ? online.map((d) => d.name).join(' · ') : '暂无在线设备'}
+          hint={online.length > 0 ? online.map((d) => d.name).join(' · ') : t('暂无在线设备')}
           icon={<Icon name="users" size={16} />}
         />
 
         <div className="wc-infotile">
           <div className="wc-infotile__cell">
-            <span>服务状态</span>
+            <span>{t('服务状态')}</span>
             <b style={{ color: status.data?.state === 'Running' ? 'var(--ok-success-text)' : 'var(--ok-danger-text)' }}>
-              {status.data ? (status.data.state === 'Running' ? '运行中' : status.data.state) : (status.error ?? '读取中')}
+              {status.data ? (status.data.state === 'Running' ? t('运行中') : status.data.state) : (status.error ?? t('读取中'))}
             </b>
           </div>
           <div className="wc-infotile__cell">
-            <span>监听地址</span>
+            <span>{t('监听地址')}</span>
             <b className="mono">
               {status.data?.addresses[0] ?? '—'}
               {status.data?.port ? `:${status.data.port}` : ''}
             </b>
           </div>
           <div className="wc-infotile__cell wc-infotile__cell--wide" title={status.data?.receivedDirectory}>
-            <span>接收目录</span>
+            <span>{t('接收目录')}</span>
             <b className="mono">{status.data?.receivedDirectory ?? '—'}</b>
           </div>
           <div className="wc-infotile__cell">
-            <span>证书指纹</span>
+            <span>{t('证书指纹')}</span>
             <b className="mono" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
               {shortFingerprint(status.data?.fingerprint ?? null)}
               <button
                 className="wc-copy"
-                aria-label="复制证书指纹"
-                onClick={() => action.run(() => copyText(status.data?.fingerprint ?? ''), '已复制证书指纹')}
+                aria-label={t('复制证书指纹')}
+                onClick={() => action.run(() => copyText(status.data?.fingerprint ?? ''), t('已复制证书指纹'))}
               >
                 <Icon name="copy" size={13} />
               </button>
             </b>
           </div>
           <div className="wc-infotile__cell">
-            <span>版本</span>
+            <span>{t('版本')}</span>
             <b className="mono">{status.data?.version ?? '—'}</b>
           </div>
         </div>
@@ -291,17 +292,17 @@ export function HomePage({
       <div className="wc-home__body">
         <section className="wc-section wc-home__devices">
           <div className="wc-section__head">
-            <h2 className="wc-section__title">我的设备</h2>
-            <span className="wc-section__hint">已配对 · {paired.length} 台</span>
+            <h2 className="wc-section__title">{t('我的设备')}</h2>
+            <span className="wc-section__hint">{t(`已配对 · ${paired.length} 台`)}</span>
             <div className="wc-section__action">
               <Button variant="ghost" size="sm" onClick={() => onNavigate('devices')}>
-                全部设备
+                {t('全部设备')}
               </Button>
             </div>
           </div>
 
           {paired.length === 0 ? (
-            <Empty text="还没有配对设备" />
+            <Empty text={t('还没有配对设备')} />
           ) : (
             <div className="wc-list">
               {paired.map((device) => (
@@ -321,37 +322,37 @@ export function HomePage({
         <div className="wc-home__side">
           <section className="wc-section wc-home__actions">
             <div className="wc-section__head">
-              <h2 className="wc-section__title">快速操作</h2>
+              <h2 className="wc-section__title">{t('快速操作')}</h2>
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <Button variant="accent" size="sm" style={{ whiteSpace: 'nowrap' }} disabled={!isDesktop() || action.busy} onClick={sendFiles}>
                 <Icon name="upload" size={16} />
-                发送文件
+                {t('发送文件')}
               </Button>
               <Button variant="soft" size="sm" style={{ whiteSpace: 'nowrap' }} onClick={onShowQr}>
                 <Icon name="qr" size={16} />
-                配对码
+                {t('配对码')}
               </Button>
               <Button
                 variant="soft"
                 size="sm"
                 style={{ whiteSpace: 'nowrap' }}
                 disabled={!isDesktop() || !status.data?.receivedDirectory}
-                onClick={() => action.run(() => openPath(status.data?.receivedDirectory ?? ''), '已在资源管理器打开')}
+                onClick={() => action.run(() => openPath(status.data?.receivedDirectory ?? ''), t('已在资源管理器打开'))}
               >
                 <Icon name="folderOpen" size={16} />
-                打开接收目录
+                {t('打开接收目录')}
               </Button>
             </div>
           </section>
 
           <section className="wc-section wc-home__recent">
             <div className="wc-section__head">
-              <h2 className="wc-section__title">最近活动</h2>
-              <span className="wc-section__hint">最近 {Math.min(5, rows.length)} 条</span>
+              <h2 className="wc-section__title">{t('最近活动')}</h2>
+              <span className="wc-section__hint">{t(`最近 ${Math.min(5, rows.length)} 条`)}</span>
             </div>
             {rows.length === 0 ? (
-              <Empty text="还没有传输记录" />
+              <Empty text={t('还没有传输记录')} />
             ) : (
               <div className="wc-timeline">
                 {rows.slice(0, 5).map((item) => (
@@ -364,7 +365,7 @@ export function HomePage({
                         {item.fileName} · {stateLabel(item.state)}
                       </div>
                       <div className="wc-tl__meta">
-                        {item.deviceName || '已移除的设备'} · {directionLabel(item.direction)} ·{' '}
+                        {item.deviceName || t('已移除的设备')} · {directionLabel(item.direction)} ·{' '}
                         {formatBytes(item.totalBytes)}
                       </div>
                     </div>
@@ -385,8 +386,8 @@ export function HomePage({
         size={420}
         icon={<Icon name="phone" />}
         tone="accent"
-        title="发送到哪台设备"
-        description={pendingSend ? `已选 ${pendingSend.length} 个文件` : ''}
+        title={t('发送到哪台设备')}
+        description={pendingSend ? t(`已选 ${pendingSend.length} 个文件`) : ''}
       >
         <div style={{ display: 'grid', gap: 8 }}>
           {online.map((device) => (
@@ -488,7 +489,7 @@ export function PairingQrDialog({
         }
 
         if (!result.ok || !result.pngBase64) {
-          setError(result.message ?? '出码失败');
+          setError(result.message ?? t('出码失败'));
           return;
         }
 
@@ -531,15 +532,15 @@ export function PairingQrDialog({
       size={420}
       tone="accent"
       icon={<Icon name="qr" />}
-      title="手机扫码配对"
-      description="手机打开 WirelessCable → 首页 → 扫码配对。"
+      title={t('手机扫码配对')}
+      description={t('手机打开 WirelessCable → 首页 → 扫码配对。')}
       actions={
         <>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            关闭
+            {t('关闭')}
           </Button>
           <Button variant="accent" disabled={busy} onClick={() => setGeneration((n) => n + 1)}>
-            {busy ? '生成中…' : qr ? '重新生成' : '生成'}
+            {busy ? t('生成中…') : qr ? t('重新生成') : t('生成')}
           </Button>
         </>
       }
@@ -561,14 +562,14 @@ export function PairingQrDialog({
           {qr?.pngBase64 ? (
             <img
               src={`data:image/png;base64,${qr.pngBase64}`}
-              alt="配对二维码"
+              alt={t('配对二维码')}
               width={208}
               height={208}
               style={{ display: 'block', opacity: expired ? 0.18 : 1, transition: 'opacity 200ms' }}
             />
           ) : (
             <span style={{ font: '450 12.5px/1.5 var(--ok-font)', color: '#666' }}>
-              {busy ? '正在准备热点…' : (error ?? '未生成')}
+              {busy ? t('正在准备热点…') : (error ?? t('未生成'))}
             </span>
           )}
 
@@ -580,7 +581,7 @@ export function PairingQrDialog({
                 color: '#333',
               }}
             >
-              已过期，请重新生成
+              {t('已过期，请重新生成')}
             </span>
           )}
         </div>
@@ -593,7 +594,7 @@ export function PairingQrDialog({
               fontVariantNumeric: 'tabular-nums',
             }}
           >
-            {qr ? (expired ? '已过期' : `有效期 ${remain} 秒`) : ' '}
+            {qr ? (expired ? t('已过期') : t(`有效期 ${remain} 秒`)) : ' '}
           </span>
           {qr?.hotspot && (
             <span style={{ font: '450 12px/1.5 var(--ok-font)', color: 'var(--ok-text-3)' }}>
@@ -646,30 +647,30 @@ function DeviceRow({
         <div className="wc-row__meta">
           {device.platform} ·{' '}
           {device.sessionPaused
-            ? '已断开连接'
+            ? t('已断开连接')
             : online
-              ? `最后活动 ${formatAgo(device.lastSeenUnixMs)}`
-              : `离线 · 最后活动 ${formatAgo(device.lastSeenUnixMs)}`}
+              ? t(`最后活动 ${formatAgo(device.lastSeenUnixMs)}`)
+              : t(`离线 · 最后活动 ${formatAgo(device.lastSeenUnixMs)}`)}
         </div>
       </div>
       <div className="wc-row__right">
         {device.sessionPaused ? (
-          <Badge tone="warning">已断开</Badge>
+          <Badge tone="warning">{t('已断开')}</Badge>
         ) : online ? (
           <Badge tone="success" dot>
-            在线
+            {t('在线')}
           </Badge>
         ) : (
-          <Badge tone="neutral">离线</Badge>
+          <Badge tone="neutral">{t('离线')}</Badge>
         )}
         <Button variant="ghost" size="sm" disabled={!online} onClick={onVisit}>
-          访问
+          {t('访问')}
         </Button>
         <Button variant="ghost" size="sm" disabled={busy || (!online && !device.sessionPaused)} onClick={onToggleSession}>
-          {device.sessionPaused ? '连接' : '断开'}
+          {device.sessionPaused ? t('连接') : t('断开')}
         </Button>
         <Button variant="ghost" size="sm" onClick={onManage}>
-          管理
+          {t('管理')}
         </Button>
       </div>
     </div>
@@ -705,13 +706,13 @@ function iconOf(state: string): string {
 function accessLabel(level: number): string {
   switch (level) {
     case 0:
-      return '不可访问';
+      return t('不可访问');
     case 1:
-      return '只读';
+      return t('只读');
     case 2:
-      return '读写（不能删）';
+      return t('读写（不能删）');
     default:
-      return '读写 + 删除';
+      return t('读写 + 删除');
   }
 }
 
@@ -730,30 +731,30 @@ export function DevicesPage() {
   return (
     <div className="wc-page">
       <div className="wc-stats">
-        <Stat label="在线设备" value={stats?.online ?? 0} hint="30 秒内有心跳" icon={<Icon name="wifi" size={16} />} />
-        <Stat label="已配对" value={stats?.paired ?? 0} hint="本机记录" icon={<Icon name="users" size={16} />} />
+        <Stat label={t('在线设备')} value={stats?.online ?? 0} hint={t('30 秒内有心跳')} icon={<Icon name="wifi" size={16} />} />
+        <Stat label={t('已配对')} value={stats?.paired ?? 0} hint={t('本机记录')} icon={<Icon name="users" size={16} />} />
         <Stat
-          label="授权目录"
+          label={t('授权目录')}
           value={stats?.directories ?? 0}
-          hint={`${stats?.grants ?? 0} 条设备授权`}
+          hint={t(`${stats?.grants ?? 0} 条设备授权`)}
           icon={<Icon name="folder" size={16} />}
         />
-        <Stat label="待授权" value={pending.length} hint={pending[0]?.deviceName ?? '没有请求'} icon={<Icon name="shield" size={16} />} />
+        <Stat label={t('待授权')} value={pending.length} hint={pending[0]?.deviceName ?? t('没有请求')} icon={<Icon name="shield" size={16} />} />
       </div>
 
       <div className="wc-section__head">
-        <h2 className="wc-section__title">已配对设备</h2>
-        <span className="wc-section__hint">{paired.length} 台记录</span>
+        <h2 className="wc-section__title">{t('已配对设备')}</h2>
+        <span className="wc-section__hint">{t(`已配对 ${paired.length} 台记录`)}</span>
         <div className="wc-section__action">
           <Button variant="soft" size="sm" onClick={() => setQrOpen(true)}>
             <Icon name="qr" size={16} />
-            扫码配对
+            {t('扫码配对')}
           </Button>
         </div>
       </div>
 
       {paired.length === 0 ? (
-        <Empty text="还没有配对过设备" />
+        <Empty text={t('还没有配对过设备')} />
       ) : (
         <div className="wc-list">
           {paired.map((device, index) => (
@@ -764,21 +765,21 @@ export function DevicesPage() {
               <div style={{ minWidth: 0 }}>
                 <div className="wc-row__name">{device.name}</div>
                 <div className="wc-row__meta">
-                  {device.platform} · 最后活动 {formatAgo(device.lastSeenUnixMs)} · {accessLabel(device.machineAccess)}
+                  {device.platform}{t(' · 最后活动 ')}{formatAgo(device.lastSeenUnixMs)} · {accessLabel(device.machineAccess)}
                 </div>
               </div>
               <div className="wc-row__right">
                 {device.sessionPaused ? (
-                  <Badge tone="warning">已断开</Badge>
+                  <Badge tone="warning">{t('已断开')}</Badge>
                 ) : device.online ? (
                   <Badge tone="success" dot>
-                    在线
+                    {t('在线')}
                   </Badge>
                 ) : (
-                  <Badge tone="neutral">离线</Badge>
+                  <Badge tone="neutral">{t('离线')}</Badge>
                 )}
                 <Button variant="ghost" size="sm" onClick={() => setManaging(device)}>
-                  管理
+                  {t('管理')}
                 </Button>
               </div>
             </div>
@@ -787,12 +788,12 @@ export function DevicesPage() {
       )}
 
       <div className="wc-section__head" style={{ marginTop: 26 }}>
-        <h2 className="wc-section__title">待授权请求</h2>
-        <span className="wc-section__hint">{pending.length} 个</span>
+        <h2 className="wc-section__title">{t('待授权请求')}</h2>
+        <span className="wc-section__hint">{t(`${pending.length} 个`)}</span>
       </div>
 
       {pending.length === 0 ? (
-        <Empty text="没有等待授权的设备" />
+        <Empty text={t('没有等待授权的设备')} />
       ) : (
         <div className="wc-list">
           {pending.map((request) => (
@@ -806,7 +807,7 @@ export function DevicesPage() {
               <div style={{ minWidth: 0 }}>
                 <div className="wc-row__name">{request.deviceName}</div>
                 <div className="wc-row__meta">
-                  {request.platform} · 校验码 <b style={{ letterSpacing: 2 }}>{request.code}</b>
+                  {request.platform}{t(' · 校验码 ')}<b style={{ letterSpacing: 2 }}>{request.code}</b>
                 </div>
               </div>
               <div className="wc-row__right">
@@ -814,17 +815,17 @@ export function DevicesPage() {
                   variant="ghost"
                   size="sm"
                   disabled={action.busy}
-                  onClick={() => action.run(() => api.post(`/pairing/${request.requestId}/reject`), '已拒绝')}
+                  onClick={() => action.run(() => api.post(`/pairing/${request.requestId}/reject`), t('已拒绝'))}
                 >
-                  拒绝
+                  {t('拒绝')}
                 </Button>
                 <Button
                   variant="accent"
                   size="sm"
                   disabled={action.busy}
-                  onClick={() => action.run(() => api.post(`/pairing/${request.requestId}/approve`), '已授权')}
+                  onClick={() => action.run(() => api.post(`/pairing/${request.requestId}/approve`), t('已授权'))}
                 >
-                  授权
+                  {t('授权')}
                 </Button>
               </div>
             </div>
@@ -878,7 +879,7 @@ function ManageDeviceDialog({
   const remove = async () => {
     try {
       await api.del(`/devices/${device.deviceId}`);
-      onDone(`已删除 ${device.name}，传输记录一并清空`);
+      onDone(t(`已删除 ${device.name}，传输记录一并清空`));
     } catch (caught) {
       onDone(caught instanceof Error ? caught.message : String(caught));
     }
@@ -891,21 +892,21 @@ function ManageDeviceDialog({
       size={480}
       icon={<Icon name="phone" />}
       title={device.name}
-      description={`${device.platform} · 配对于 ${formatAgo(device.pairedAtUnixMs)}`}
+      description={t(`${device.platform} · 配对于 ${formatAgo(device.pairedAtUnixMs)}`)}
       actions={
         <>
           <Button variant="ghost" onClick={onClose}>
-            关闭
+            {t('关闭')}
           </Button>
-          <Button variant="accent" onClick={() => apply(`/devices/${device.deviceId}/rename`, { name }, '已改名')}>
-            保存名称
+          <Button variant="accent" onClick={() => apply(`/devices/${device.deviceId}/rename`, { name }, t('已改名'))}>
+            {t('保存名称')}
           </Button>
         </>
       }
     >
       <div style={{ display: 'grid', gap: 12, marginTop: 4 }}>
         <label className="wc-field" style={{ padding: 0 }}>
-          <span style={{ minWidth: 72, font: '600 13px/1.4 var(--ok-font)', color: 'var(--ok-text-2)' }}>名称</span>
+          <span style={{ minWidth: 72, font: '600 13px/1.4 var(--ok-font)', color: 'var(--ok-text-2)' }}>{t('名称')}</span>
           <input
             value={name}
             onChange={(event) => setName(event.target.value)}
@@ -924,14 +925,14 @@ function ManageDeviceDialog({
 
         <div className="wc-field" style={{ padding: 0, alignItems: 'flex-start' }}>
           <span style={{ minWidth: 72, font: '600 13px/1.4 var(--ok-font)', color: 'var(--ok-text-2)', paddingTop: 6 }}>
-            整机访问
+            {t('整机访问')}
           </span>
           <select
             value={level}
             onChange={(event) => {
               const next = Number(event.target.value);
               setLevel(next);
-              void apply(`/devices/${device.deviceId}/machine-access`, { level: next }, '已更新整机权限');
+              void apply(`/devices/${device.deviceId}/machine-access`, { level: next }, t('已更新整机权限'));
             }}
             style={{
               height: 36,
@@ -943,10 +944,10 @@ function ManageDeviceDialog({
               font: '450 13.5px/1.4 var(--ok-font)',
             }}
           >
-            <option value={0}>不可访问</option>
-            <option value={1}>只读</option>
-            <option value={2}>读写（不能删）</option>
-            <option value={3}>读写 + 删除</option>
+            <option value={0}>{t('不可访问')}</option>
+            <option value={1}>{t('只读')}</option>
+            <option value={2}>{t('读写（不能删）')}</option>
+            <option value={3}>{t('读写 + 删除')}</option>
           </select>
         </div>
 
@@ -958,28 +959,28 @@ function ManageDeviceDialog({
               apply(
                 `/devices/${device.deviceId}/session`,
                 { paused: !device.sessionPaused },
-                device.sessionPaused ? '已恢复连接' : '已断开这台设备',
+                device.sessionPaused ? t('已恢复连接') : t('已断开这台设备'),
               )
             }
           >
-            {device.sessionPaused ? '恢复连接' : '断开连接'}
+            {device.sessionPaused ? t('恢复连接') : t('断开连接')}
           </Button>
           <Button
             variant="ghost"
             size="sm"
             onClick={() => setConfirmDelete((current) => !current)}
           >
-            {confirmDelete ? '取消删除' : '删除设备'}
+            {confirmDelete ? t('取消删除') : t('删除设备')}
           </Button>
         </div>
 
         {confirmDelete && (
           <div style={{ display: 'grid', gap: 8 }}>
             <div style={{ font: '450 12.5px/1.5 var(--ok-font)', color: 'var(--ok-text-3)' }}>
-              删除后记录与授权一并清除，需要重新配对；已接收的文件保留。
+              {t('删除后记录与授权一并清除，需要重新配对；已接收的文件保留。')}
             </div>
             <Button variant="danger" size="sm" onClick={remove}>
-              确认删除
+              {t('确认删除')}
             </Button>
           </div>
         )}
@@ -1042,7 +1043,7 @@ function groupTasks(rows: TransferDto[]): RowGroup[] {
     groups.push({
       key: `batch:${row.batchId}`,
       batchId: row.batchId,
-      name: row.batchName || '文件夹',
+      name: row.batchName || t('文件夹'),
       items: byBatch.get(row.batchId) ?? [row],
     });
   });
@@ -1159,7 +1160,7 @@ export function TransfersPage() {
   /**
    * 一整行上的动作。
    *
-   * 单条走 `/transfers/{id}/{verb}`；整批走 `/transfers/batch` 一次发完——
+   * 单条走 /transfers/{id}/{verb}；整批走 /transfers/batch 一次发完——
    * 200 个文件逐个发请求，光往返就要好几秒，中途失败还会只停一半。
    */
   const actGroup = (
@@ -1191,8 +1192,8 @@ export function TransfersPage() {
 
     if (single?.localPath && isDesktop()) {
       items.push({
-        label: '在资源管理器中显示',
-        onSelect: () => action.run(() => openPath(single.localPath ?? ''), '已定位到文件'),
+        label: t('在资源管理器中显示'),
+        onSelect: () => action.run(() => openPath(single.localPath ?? ''), t('已定位到文件')),
       });
     }
 
@@ -1203,32 +1204,32 @@ export function TransfersPage() {
     if (groupActive) {
       if (allPaused) {
         items.push({
-          label: group.batchId ? '继续整批' : '继续',
-          onSelect: () => actGroup(group, 'resume', '已继续传输'),
+          label: group.batchId ? t('继续整批') : t('继续'),
+          onSelect: () => actGroup(group, 'resume', t('已继续传输')),
         });
       } else {
         items.push({
-          label: group.batchId ? '全部暂停' : '暂停',
-          onSelect: () => actGroup(group, 'pause', '已暂停'),
+          label: group.batchId ? t('全部暂停') : t('暂停'),
+          onSelect: () => actGroup(group, 'pause', t('已暂停')),
         });
       }
 
       if (allStuck) {
         items.push({
-          label: group.batchId ? '整批重新开始' : '重新开始',
-          onSelect: () => actGroup(group, 'restart', '已重新开始'),
+          label: group.batchId ? t('整批重新开始') : t('重新开始'),
+          onSelect: () => actGroup(group, 'restart', t('已重新开始')),
         });
       }
 
       items.push({
-        label: group.batchId ? '全部取消' : '取消',
+        label: group.batchId ? t('全部取消') : t('取消'),
         danger: true,
-        onSelect: () => actGroup(group, 'cancel', '已取消'),
+        onSelect: () => actGroup(group, 'cancel', t('已取消')),
       });
     }
 
     items.push({
-      label: group.batchId ? `删除整批（${group.items.length} 个文件）` : '删除记录',
+      label: group.batchId ? t(`删除整批（${group.items.length} 个文件）`) : t('删除记录'),
       danger: true,
       disabled: group.items.some((row) => isInFlight(row.state)),
       onSelect: () =>
@@ -1247,8 +1248,8 @@ export function TransfersPage() {
         <div style={{ display: 'flex', gap: 6 }}>
           {(
             [
-              ['active', `传输中 ${activeGroups.length}`],
-              ['done', `已完成 ${doneGroups.length}`],
+              ['active', t(`传输中 ${activeGroups.length}`)],
+              ['done', t(`已完成 ${doneGroups.length}`)],
             ] as const
           ).map(([key, label]) => (
             <button
@@ -1265,10 +1266,10 @@ export function TransfersPage() {
         <div className="wc-section__action">
           {selected.length > 0 && (
             <span style={{ font: '500 12px/1 var(--ok-font)', color: 'var(--ok-text-3)' }}>
-              {/* 点的是"行"：整批选中时把文件数一起写出来，避免以为只选了一个 */}
+              {/* 点的是行：整批选中时把文件数一起写出来，避免以为只选了一个 */}
               {selected.length === selectedGroupCount
-                ? `已选 ${selectedGroupCount} 项`
-                : `已选 ${selectedGroupCount} 项 · ${selected.length} 个文件`}
+                ? t(`已选 ${selectedGroupCount} 项`)
+                : t(`已选 ${selectedGroupCount} 项 · ${selected.length} 个文件`)}
             </span>
           )}
           <label className="wc-checkline">
@@ -1278,22 +1279,22 @@ export function TransfersPage() {
               checked={allChecked}
               onChange={(event) => setSelected(event.target.checked ? shown.map((row) => row.taskId) : [])}
             />
-            全选
+            {t('全选')}
           </label>
           <Button
             variant="ghost"
             size="sm"
             disabled={deletableIds.length === 0 || action.busy}
-            title={deletableIds.length === 0 && selected.length > 0 ? '进行中的任务不能删除，请先取消' : undefined}
+            title={deletableIds.length === 0 && selected.length > 0 ? t('进行中的任务不能删除，请先取消') : undefined}
             onClick={() => askDelete(deletableIds)}
           >
-            删除
+            {t('删除')}
           </Button>
           {(
             [
-              ['all', '全部'],
-              ['sent', '我发送的'],
-              ['received', '我收到的'],
+              ['all', t('全部')],
+              ['sent', t('我发送的')],
+              ['received', t('我收到的')],
             ] as const
           ).map(([key, label]) => (
             <Button
@@ -1309,10 +1310,10 @@ export function TransfersPage() {
         </div>
       </div>
 
-      {transfers.error && <Notice text={`读取失败：${transfers.error}`} />}
+      {transfers.error && <Notice text={t(`读取失败：${transfers.error}`)} />}
 
       {groups.length === 0 ? (
-        <Empty text={tab === 'active' ? '没有进行中的传输' : '还没有完成的传输'} />
+        <Empty text={tab === 'active' ? t('没有进行中的传输') : t('还没有完成的传输')} />
       ) : (
         <div className="wc-list">
           {groups.map((group, index) => {
@@ -1340,7 +1341,7 @@ export function TransfersPage() {
                 onDoubleClick={() => {
                   // 双击 = 用默认应用打开；整批没有单一落点，只在单文件行生效
                   if (single?.localPath && isDesktop()) {
-                    action.run(() => openFile(single.localPath ?? ''), '已打开');
+                    action.run(() => openFile(single.localPath ?? ''), t('已打开'));
                   }
                 }}
                 onContextMenu={(event) => {
@@ -1355,7 +1356,7 @@ export function TransfersPage() {
               >
                 <input
                   type="checkbox"
-                  aria-label={`选择 ${group.name}`}
+                  aria-label={t(`选择 ${group.name}`)}
                   checked={checked}
                   onChange={(event) =>
                     setSelected((current) => {
@@ -1392,15 +1393,15 @@ export function TransfersPage() {
                           color: 'var(--ok-text-3)',
                         }}
                       >
-                        {files} 个文件
+                        {t(`${files} 个文件`)}
                       </span>
                     )}
                   </div>
                   <div className="wc-row__meta">
-                    {lead.deviceName || '已移除的设备'} · {directionLabel(lead.direction)} ·{' '}
-                    {group.batchId ? `已完成 ${completed}/${files} · ` : ''}
+                    {lead.deviceName || t('已移除的设备')} · {directionLabel(lead.direction)} ·{' '}
+                    {group.batchId ? t(`已完成 ${completed}/${files} · `) : ''}
                     {formatBytes(doneBytes)} / {formatBytes(total)}
-                    {tab === 'active' && ` · ${allPaused ? '已暂停' : allStuck ? '未完成' : '传输中'}`}
+                    {tab === 'active' && t(` · ${allPaused ? t('已暂停') : allStuck ? t('未完成') : t('传输中')}`)}
                   </div>
                   {tab === 'active' ? (
                     <div className="wc-progress" style={{ marginTop: 8 }}>
@@ -1409,7 +1410,7 @@ export function TransfersPage() {
                   ) : (
                     lead.errorMessage && (
                       <div className="wc-row__meta" style={{ color: 'var(--ok-danger-text)' }}>
-                        {files > 1 && `${files - completed} 个没传完：`}
+                        {files > 1 && t(`${files - completed} 个没传完：`)}
                         {lead.errorMessage}
                       </div>
                     )
@@ -1433,9 +1434,9 @@ export function TransfersPage() {
                           variant="ghost"
                           size="sm"
                           iconOnly
-                          aria-label={group.batchId ? '继续整批' : '继续'}
+                          aria-label={group.batchId ? t('继续整批') : t('继续')}
                           disabled={action.busy}
-                          onClick={() => actGroup(group, 'resume', '已继续传输')}
+                          onClick={() => actGroup(group, 'resume', t('已继续传输'))}
                         >
                           <Icon name="play" size={16} />
                         </Button>
@@ -1444,9 +1445,9 @@ export function TransfersPage() {
                           variant="ghost"
                           size="sm"
                           iconOnly
-                          aria-label={group.batchId ? '全部暂停' : '暂停'}
+                          aria-label={group.batchId ? t('全部暂停') : t('暂停')}
                           disabled={action.busy || allStuck}
-                          onClick={() => actGroup(group, 'pause', '已暂停')}
+                          onClick={() => actGroup(group, 'pause', t('已暂停'))}
                         >
                           <Icon name="pause" size={16} />
                         </Button>
@@ -1456,9 +1457,9 @@ export function TransfersPage() {
                           variant="ghost"
                           size="sm"
                           iconOnly
-                          aria-label="重试"
+                          aria-label={t('重试')}
                           disabled={action.busy}
-                          onClick={() => actGroup(group, 'restart', '已重新开始')}
+                          onClick={() => actGroup(group, 'restart', t('已重新开始'))}
                         >
                           <Icon name="refresh" size={16} />
                         </Button>
@@ -1475,8 +1476,8 @@ export function TransfersPage() {
                             variant="ghost"
                             size="sm"
                             iconOnly
-                            aria-label="打开文件"
-                            onClick={() => action.run(() => openFile(single.localPath ?? ''), '已打开')}
+                            aria-label={t('打开文件')}
+                            onClick={() => action.run(() => openFile(single.localPath ?? ''), t('已打开'))}
                           >
                             <Icon name="file" size={16} />
                           </Button>
@@ -1484,9 +1485,9 @@ export function TransfersPage() {
                             variant="ghost"
                             size="sm"
                             iconOnly
-                            aria-label="打开所在目录"
+                            aria-label={t('打开所在目录')}
                             onClick={() =>
-                              action.run(() => openPath(single.localPath ?? ''), '已定位到文件')
+                              action.run(() => openPath(single.localPath ?? ''), t('已定位到文件'))
                             }
                           >
                             <Icon name="folderOpen" size={16} />
@@ -1636,8 +1637,8 @@ function DeleteTransfersDialog({
       const rejected = result.rejected?.length ?? 0;
       onDone(
         rejected > 0
-          ? `已删除 ${result.deleted} 条，${rejected} 条被跳过：${result.rejected[0]}`
-          : `已删除 ${result.deleted} 条记录`,
+          ? t(`已删除 ${result.deleted} 条，${rejected} 条被跳过：${result.rejected[0]}`)
+          : t(`已删除 ${result.deleted} 条记录`),
       );
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -1657,15 +1658,15 @@ function DeleteTransfersDialog({
       size={430}
       tone="danger"
       icon={<Icon name="trash" />}
-      title={batchName ? `删除「${batchName}」的 ${count} 个文件` : `删除 ${count} 条传输记录`}
-      description="只删记录和本机收到的文件；手机上的原件、电脑发出的原文件都不动。"
+      title={batchName ? t(`删除「${batchName}」的 ${count} 个文件`) : t(`删除 ${count} 条传输记录`)}
+      description={t('只删记录和本机收到的文件；手机上的原件、电脑发出的原文件都不动。')}
       actions={
         <>
           <Button variant="ghost" onClick={onClose} disabled={busy}>
-            取消
+            {t('取消')}
           </Button>
           <Button variant="danger" onClick={submit} disabled={busy || count === 0}>
-            删除
+            {t('删除')}
           </Button>
         </>
       }
@@ -1677,12 +1678,12 @@ function DeleteTransfersDialog({
           disabled={receivedFiles === 0}
           onChange={(event) => setWithFiles(event.target.checked)}
         />
-        同时删除接收到的文件（{receivedFiles} 个）
+        {t(`同时删除接收到的文件（${receivedFiles} 个）`)}
       </label>
       <div style={{ font: '450 12px/1.5 var(--ok-font)', color: 'var(--ok-text-3)', marginTop: 6 }}>
         {receivedFiles === 0
-          ? '所选记录里没有本机收到的文件。'
-          : '只删手机传过来、已经落到本机的文件；本机发出去的原文件不会被删除。'}
+          ? t('所选记录里没有本机收到的文件。')
+          : t('只删手机传过来、已经落到本机的文件；本机发出去的原文件不会被删除。')}
       </div>
       {error && (
         <div style={{ font: '450 12.5px/1.5 var(--ok-font)', color: 'var(--ok-danger-text)', marginTop: 8 }}>
@@ -1819,7 +1820,7 @@ export function FilesPage({
         if (list.length > 0) {
           setRootId(list[0].rootId);
         } else {
-          setError('手机上还没有授权给电脑的目录。在手机端「设备」里授权后，这里会出现。');
+          setError(t('手机上还没有授权给电脑的目录。在手机端「设备」里授权后，这里会出现。'));
         }
       } catch (caught) {
         if (alive) {
@@ -1918,24 +1919,24 @@ export function FilesPage({
     setNoticeAt(Date.now());
   };
 
-  /** 文件行/空白处的右键菜单：双击与右键用同一套"主操作"。 */
+  /** 文件行/空白处的右键菜单：双击与右键共用同一套主操作。 */
   const fileMenuItems = (entry: DeviceEntry | null) => {
     const items: { label: string; danger?: boolean; disabled?: boolean; onSelect: () => void }[] = [];
 
     if (entry) {
       if (entry.isDirectory) {
-        items.push({ label: '打开', onSelect: () => setPath(entry.relativePath) });
+        items.push({ label: t('打开'), onSelect: () => setPath(entry.relativePath) });
         // 整个文件夹也能直接保存：展开后逐个下发，接收目录里按原结构建目录（1.5.59）
         items.push({
-          label: '保存到电脑',
+          label: t('保存到电脑'),
           disabled: !canRead(entry.capabilities) || !current?.online || Boolean(current?.sessionPaused),
           onSelect: () => void saveEntries([entry]),
         });
       } else if (queued.has(entry.relativePath)) {
-        items.push({ label: '等待手机接收…', disabled: true, onSelect: () => undefined });
+        items.push({ label: t('等待手机接收…'), disabled: true, onSelect: () => undefined });
       } else {
         items.push({
-          label: '保存到电脑',
+          label: t('保存到电脑'),
           disabled: !canRead(entry.capabilities) || !current?.online || Boolean(current?.sessionPaused),
           onSelect: () => void saveToComputer(entry),
         });
@@ -1943,10 +1944,10 @@ export function FilesPage({
     }
 
     if (segments.length > 0) {
-      items.push({ label: '返回上一级', onSelect: () => jumpTo(segments.length - 1) });
+      items.push({ label: t('返回上一级'), onSelect: () => jumpTo(segments.length - 1) });
     }
 
-    items.push({ label: '刷新', onSelect: () => setRefresh((n) => n + 1) });
+    items.push({ label: t('刷新'), onSelect: () => setRefresh((n) => n + 1) });
     return items;
   };
 
@@ -1956,19 +1957,19 @@ export function FilesPage({
     }
 
     if (queued.has(entry.relativePath)) {
-      notify('这个文件已在等待手机接收');
+      notify(t('这个文件已在等待手机接收'));
       return;
     }
 
     if (!current || !current.online || current.sessionPaused) {
-      notify('手机不在线，连上后再保存');
+      notify(t('手机不在线，连上后再保存'));
       return;
     }
 
     // 心跳 10 秒一次、30 秒判离线：20 秒没动静就是连续丢了两次。
     // 这时候排下去的作业会一直 pending，用户只会看到"点了没反应"。
     if (Date.now() - current.lastSeenUnixMs > 20_000) {
-      notify('手机已超过 20 秒没有响应（可能已休眠），点亮屏幕后再试');
+      notify(t('手机已超过 20 秒没有响应（可能已休眠），点亮屏幕后再试'));
       return;
     }
 
@@ -1998,18 +1999,18 @@ export function FilesPage({
         }
 
         if (status.status === 'failed') {
-          throw new Error(status.errorMessage ?? '手机读取文件失败');
+          throw new Error(status.errorMessage ?? t('手机读取文件失败'));
         }
       }
 
       if (!completed) {
         // 作业不会丢：手机下次连上会接着执行，落点仍是接收目录。
         // 按钮会通过 /files/pending 变成"等待手机…"，这里只给一句说明。
-        notify('已排队，手机连上后会自动保存到接收目录');
+        notify(t('已排队，手机连上后会自动保存到接收目录'));
         return;
       }
 
-      notify(`「${entry.name}」已保存到接收目录`);
+      notify(t(`「${entry.name}」已保存到接收目录`));
     } catch (caught) {
       notify(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -2020,12 +2021,12 @@ export function FilesPage({
   /** 手机是否真的能干活：在线 + 心跳够新。返回 false 时已经给过提示。 */
   const ensurePhoneReady = (action: string): boolean => {
     if (!current || !current.online || current.sessionPaused) {
-      notify(`手机不在线，连上后再${action}`);
+      notify(t(`手机不在线，连上后再${action}`));
       return false;
     }
 
     if (Date.now() - current.lastSeenUnixMs > 20_000) {
-      notify('手机已超过 20 秒没有响应（可能已休眠），点亮屏幕后再试');
+      notify(t('手机已超过 20 秒没有响应（可能已休眠），点亮屏幕后再试'));
       return false;
     }
 
@@ -2045,7 +2046,7 @@ export function FilesPage({
       }
 
       if (status.status === 'failed') {
-        throw new Error(status.errorMessage ?? '手机执行失败');
+        throw new Error(status.errorMessage ?? t('手机执行失败'));
       }
     }
 
@@ -2097,19 +2098,19 @@ export function FilesPage({
 
   const summarize = (result: { done: number; timeouts: number; failures: string[] }, verb: string) => {
     if (result.failures.length > 0) {
-      return `${verb}完成 ${result.done} 项，${result.failures.length} 项失败：${result.failures[0]}`;
+      return t(`${verb}完成 ${result.done} 项，${result.failures.length} 项失败：${result.failures[0]}`);
     }
 
     if (result.timeouts > 0) {
-      return `${verb}完成 ${result.done} 项，${result.timeouts} 项仍在手机执行`;
+      return t(`${verb}完成 ${result.done} 项，${result.timeouts} 项仍在手机执行`);
     }
 
-    return `${verb}完成 ${result.done} 项`;
+    return t(`${verb}完成 ${result.done} 项`);
   };
 
   const deleteSelected = async () => {
     setDeleteOpen(false);
-    if (!ensurePhoneReady('删除')) {
+    if (!ensurePhoneReady(t('删除'))) {
       return;
     }
 
@@ -2119,9 +2120,9 @@ export function FilesPage({
         sourcePath: entry.relativePath,
         label: entry.name,
       })),
-      '正在删除',
+      t('正在删除'),
     );
-    notify(summarize(result, '删除'));
+    notify(summarize(result, t('删除')));
   };
 
   const confirmTransfer = async (targetDir: string) => {
@@ -2130,7 +2131,7 @@ export function FilesPage({
       return;
     }
 
-    if (!ensurePhoneReady(mode === 'move' ? '移动' : '复制')) {
+    if (!ensurePhoneReady(mode === 'move' ? t('移动') : t('复制'))) {
       return;
     }
 
@@ -2143,9 +2144,9 @@ export function FilesPage({
         displayName: entry.name,
         label: entry.name,
       })),
-      mode === 'move' ? '正在移动' : '正在复制',
+      mode === 'move' ? t('正在移动') : t('正在复制'),
     );
-    notify(summarize(result, mode === 'move' ? '移动' : '复制'));
+    notify(summarize(result, mode === 'move' ? t('移动') : t('复制')));
   };
 
   const confirmRename = async (newName: string) => {
@@ -2154,7 +2155,7 @@ export function FilesPage({
       return;
     }
 
-    if (!ensurePhoneReady('重命名')) {
+    if (!ensurePhoneReady(t('重命名'))) {
       return;
     }
 
@@ -2162,9 +2163,9 @@ export function FilesPage({
     const result = await runJobs(
       'rename',
       [{ sourcePath: entry.relativePath, displayName: newName, label: entry.name }],
-      '正在重命名',
+      t('正在重命名'),
     );
-    notify(result.failures.length > 0 ? result.failures[0] : `已重命名为「${newName}」`);
+    notify(result.failures.length > 0 ? result.failures[0] : t(`已重命名为「${newName}」`));
   };
 
   /**
@@ -2234,7 +2235,7 @@ export function FilesPage({
    * 例如「相册/2024」），手机上传时声明它，服务端按同样层级建目录。
    */
   const saveEntries = async (targets: DeviceEntry[]) => {
-    if (!ensurePhoneReady('保存')) {
+    if (!ensurePhoneReady(t('保存'))) {
       return;
     }
 
@@ -2250,7 +2251,7 @@ export function FilesPage({
 
       folders += 1;
       setSavingPath(entry.relativePath);
-      setActionBusy(`正在读取「${entry.name}」…`);
+      setActionBusy(t(`正在读取「${entry.name}」…`));
       try {
         const result = await collectFolderFiles(entry);
         for (const file of result.files) {
@@ -2262,10 +2263,10 @@ export function FilesPage({
         }
 
         if (result.truncated) {
-          failures.push(`「${entry.name}」文件太多，只取了前 1000 个`);
+          failures.push(t(`「${entry.name}」文件太多，只取了前 1000 个`));
         }
         if (result.cyclic) {
-          failures.push(`「${entry.name}」里有循环引用或越界路径，已跳过那部分`);
+          failures.push(t(`「${entry.name}」里有循环引用或越界路径，已跳过那部分`));
         }
       } catch (caught) {
         failures.push(`「${entry.name}」：${caught instanceof Error ? caught.message : String(caught)}`);
@@ -2276,7 +2277,7 @@ export function FilesPage({
 
     if (tasks.length === 0) {
       setActionBusy(null);
-      notify(failures[0] ?? '这个文件夹里没有文件');
+      notify(failures[0] ?? t('这个文件夹里没有文件'));
       return;
     }
 
@@ -2284,7 +2285,7 @@ export function FilesPage({
     let index = 0;
     for (const task of tasks) {
       index += 1;
-      setActionBusy(`正在交给手机 ${index}/${tasks.length}`);
+      setActionBusy(t(`正在交给手机 ${index}/${tasks.length}`));
 
       if (queued.has(task.sourcePath)) {
         ok += 1;
@@ -2309,18 +2310,18 @@ export function FilesPage({
     setActionBusy(null);
     setSelected([]);
 
-    const scope = folders > 0 ? `（${folders} 个文件夹按原结构保存）` : '';
+    const scope = folders > 0 ? t(`（${folders} 个文件夹按原结构保存）`) : '';
     notify(
       failures.length > 0
-        ? `已交给手机 ${ok} 个文件${scope}，${failures.length} 条失败：${failures[0]}`
-        : `已交给手机 ${ok} 个文件${scope}，保存到接收目录`,
+        ? t(`已交给手机 ${ok} 个文件${scope}，${failures.length} 条失败：${failures[0]}`)
+        : t(`已交给手机 ${ok} 个文件${scope}，保存到接收目录`),
     );
   };
 
   const saveSelected = () => saveEntries(selectedRows);
 
   const queued = new Set(pending.map((job) => job.sourcePath ?? ''));
-  const queuedNames = pending.map((job) => job.displayName ?? '文件');
+  const queuedNames = pending.map((job) => job.displayName ?? t('文件'));
 
   // 换设备/根/目录都清空选择：看不见的行不能继续被操作
   useEffect(() => {
@@ -2429,7 +2430,7 @@ export function FilesPage({
           ))}
         </div>
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <label className="wc-checkline" title="全选当前目录">
+          <label className="wc-checkline" title={t('全选当前目录')}>
             <input
               ref={masterRef}
               type="checkbox"
@@ -2439,11 +2440,11 @@ export function FilesPage({
                 setSelected(event.target.checked ? entries.map((entry) => entry.relativePath) : [])
               }
             />
-            全选
+            {t('全选')}
           </label>
           <Button variant="ghost" size="sm" disabled={!deviceId} onClick={() => setRefresh((n) => n + 1)}>
             <Icon name="refresh" size={16} />
-            刷新
+            {t('刷新')}
           </Button>
         </div>
       </div>
@@ -2475,7 +2476,7 @@ export function FilesPage({
               variant="ghost"
               size="sm"
               iconOnly
-              aria-label="上一级"
+              aria-label={t('上一级')}
               onClick={() => jumpTo(segments.length - 1)}
             >
               <Icon name="arrowLeft" size={15} />
@@ -2489,7 +2490,7 @@ export function FilesPage({
               onClick={() => jumpTo(0)}
               title={root?.displayName ?? ''}
             >
-              {root?.displayName ?? '根目录'}
+              {root?.displayName ?? t('根目录')}
             </button>
             {segments.map((segment, index) => (
               <span key={`${segment}-${index}`} style={{ display: 'inline-flex', alignItems: 'center' }}>
@@ -2511,36 +2512,36 @@ export function FilesPage({
         <div className="wc-queue">
           <Icon name="clock" size={15} />
           <span>
-            等待手机接收：
+            {t('等待手机接收：')}
             {queuedNames.slice(0, 2).join('、')}
-            {queuedNames.length > 2 ? ` 等 ${queuedNames.length} 个` : ''}
+            {queuedNames.length > 2 ? t(` 等 ${queuedNames.length} 个`) : ''}
           </span>
           <span
             className="wc-queue__hint"
-            title="手机休眠时不会执行；可在系统设置里把 WirelessCable 设为「后台不限制」"
+            title={t('手机休眠时不会执行；可在系统设置里把 WirelessCable 设为「后台不限制」')}
           >
-            手机连上后自动保存到接收目录
+            {t('手机连上后自动保存到接收目录')}
           </span>
         </div>
       )}
 
-      {devices.error && <Notice text={`读取设备失败：${devices.error}`} />}
+      {devices.error && <Notice text={t(`读取设备失败：${devices.error}`)} />}
       {error && <Notice text={error} />}
 
       {!deviceId ? (
         <Empty
           text={
             paired.length === 0
-              ? '还没有配对设备'
+              ? t('还没有配对设备')
               : online.length === 0
-                ? '没有在线设备（离线时无法浏览）'
-                : '正在读取设备…'
+                ? t('没有在线设备（离线时无法浏览）')
+                : t('正在读取设备…')
           }
         />
       ) : loading ? (
-        <Empty text="正在读取手机目录…" />
+        <Empty text={t('正在读取手机目录…')} />
       ) : entries.length === 0 ? (
-        <Empty text={error ? '读不到这个目录' : '这个目录是空的'} />
+        <Empty text={error ? t('读不到这个目录') : t('这个目录是空的')} />
       ) : (
         <div className="wc-list">
           {entries.map((entry, index) => (
@@ -2569,7 +2570,7 @@ export function FilesPage({
             >
               <input
                 type="checkbox"
-                aria-label={`选择 ${entry.name}`}
+                aria-label={t(`选择 ${entry.name}`)}
                 checked={selected.includes(entry.relativePath)}
                 onChange={(event) => toggleSelected(entry.relativePath, event.target.checked)}
                 onDoubleClick={(event) => event.stopPropagation()}
@@ -2592,7 +2593,7 @@ export function FilesPage({
                 </div>
                 <div className="wc-row__meta">
                   {entry.isDirectory
-                    ? '文件夹'
+                    ? t('文件夹')
                     : `${formatBytes(entry.sizeBytes)}${entry.modifiedUnixMs > 0 ? ` · ${formatClock(entry.modifiedUnixMs)}` : ''}`}
                 </div>
               </div>
@@ -2601,7 +2602,7 @@ export function FilesPage({
                 {entry.isDirectory ? (
                   <>
                     <Button variant="ghost" size="sm" onClick={() => setPath(entry.relativePath)}>
-                      打开
+                      {t('打开')}
                     </Button>
                     <Button
                       variant="soft"
@@ -2614,17 +2615,17 @@ export function FilesPage({
                       }
                       title={
                         !current?.online || current?.sessionPaused
-                          ? '手机不在线，连上后再保存'
-                          : '按原目录结构保存到接收目录'
+                          ? t('手机不在线，连上后再保存')
+                          : t('按原目录结构保存到接收目录')
                       }
                       onClick={() => void saveEntries([entry])}
                     >
-                      {savingPath === entry.relativePath ? '读取中…' : '保存'}
+                      {savingPath === entry.relativePath ? t('读取中…') : t('保存')}
                     </Button>
                   </>
                 ) : queued.has(entry.relativePath) ? (
                   <Button variant="ghost" size="sm" disabled>
-                    等待手机…
+                    {t('等待手机…')}
                   </Button>
                 ) : (
                   <Button
@@ -2636,10 +2637,10 @@ export function FilesPage({
                       !current?.online ||
                       current?.sessionPaused
                     }
-                    title={!current?.online || current?.sessionPaused ? '手机不在线，连上后再保存' : undefined}
+                    title={!current?.online || current?.sessionPaused ? t('手机不在线，连上后再保存') : undefined}
                     onClick={() => void saveToComputer(entry)}
                   >
-                    {savingPath === entry.relativePath ? '保存中…' : '保存到电脑'}
+                    {savingPath === entry.relativePath ? t('保存中…') : t('保存到电脑')}
                   </Button>
                 )}
               </div>
@@ -2654,52 +2655,52 @@ export function FilesPage({
           <div className="wc-filebar__spacer" />
           <div className="wc-filebar">
           <span className="wc-filebar__count">
-            已选 {selected.length} 项
+            {t(`已选 ${selected.length} 项`)}
             {actionBusy && <span className="wc-filebar__busy">{actionBusy}</span>}
           </span>
 
           <div className="wc-filebar__actions">
             <Button variant="soft" size="sm" disabled={Boolean(actionBusy)} onClick={() => void saveSelected()}>
-              保存到电脑
+              {t('保存到电脑')}
             </Button>
             <Button
               variant="ghost"
               size="sm"
               disabled={Boolean(actionBusy) || !canMoveSelected}
-              title={!canMoveSelected ? '所选项目不支持移动' : undefined}
+              title={!canMoveSelected ? t('所选项目不支持移动') : undefined}
               onClick={() => setTransferMode('move')}
             >
-              移动
+              {t('移动')}
             </Button>
             <Button
               variant="ghost"
               size="sm"
               disabled={Boolean(actionBusy) || !canCopySelected}
-              title={!canCopySelected ? '所选项目不支持复制' : undefined}
+              title={!canCopySelected ? t('所选项目不支持复制') : undefined}
               onClick={() => setTransferMode('copy')}
             >
-              复制
+              {t('复制')}
             </Button>
             <Button
               variant="ghost"
               size="sm"
               disabled={Boolean(actionBusy) || !canRenameSelected}
-              title={!canRenameSelected ? '选中单个项目才能重命名' : undefined}
+              title={!canRenameSelected ? t('选中单个项目才能重命名') : undefined}
               onClick={() => setRenameTarget(selectedRows[0] ?? null)}
             >
-              重命名
+              {t('重命名')}
             </Button>
             <Button
               variant="ghost"
               size="sm"
               disabled={Boolean(actionBusy) || !canDeleteSelected}
-              title={!canDeleteSelected ? '所选项目不支持删除' : undefined}
+              title={!canDeleteSelected ? t('所选项目不支持删除') : undefined}
               onClick={() => setDeleteOpen(true)}
             >
-              删除
+              {t('删除')}
             </Button>
             <Button variant="ghost" size="sm" onClick={() => setSelected([])}>
-              取消
+              {t('取消')}
             </Button>
           </div>
           </div>
@@ -2775,15 +2776,15 @@ function RenameFileDialog({
       size={420}
       tone="accent"
       icon={<Icon name="edit" />}
-      title="重命名"
-      description="只改名字，位置不变。"
+      title={t('重命名')}
+      description={t('只改名字，位置不变。')}
       actions={
         <>
           <Button variant="ghost" onClick={onClose} disabled={busy}>
-            取消
+            {t('取消')}
           </Button>
           <Button variant="accent" disabled={busy || invalid} onClick={() => onConfirm(trimmed)}>
-            重命名
+            {t('重命名')}
           </Button>
         </>
       }
@@ -2799,8 +2800,8 @@ function RenameFileDialog({
           }
         }}
       />
-      {badFormat && <div className="wc-field__hint">名称不能包含 / 或 \。</div>}
-      {entry && trimmed.length === 0 && <div className="wc-field__hint">名称不能为空。</div>}
+      {badFormat && <div className="wc-field__hint">{t('名称不能包含 / 或 \\。')}</div>}
+      {entry && trimmed.length === 0 && <div className="wc-field__hint">{t('名称不能为空。')}</div>}
     </Dialog>
   );
 }
@@ -2831,22 +2832,22 @@ function DeleteFilesDialog({
       size={430}
       tone="danger"
       icon={<Icon name="trash" />}
-      title={`删除 ${entries.length} 项`}
-      description="删除后无法恢复；文件夹会连同里面的内容一起删除。"
+      title={t(`删除 ${entries.length} 项`)}
+      description={t('删除后无法恢复；文件夹会连同里面的内容一起删除。')}
       actions={
         <>
           <Button variant="ghost" onClick={onClose}>
-            取消
+            {t('取消')}
           </Button>
           <Button variant="danger" onClick={onConfirm}>
-            删除
+            {t('删除')}
           </Button>
         </>
       }
     >
       <div style={{ font: '450 12.5px/1.6 var(--ok-font)', color: 'var(--ok-text-2)', wordBreak: 'break-all' }}>
         {names.join('、')}
-        {more > 0 ? ` 等 ${entries.length} 项` : ''}
+        {more > 0 ? t(` 等 ${entries.length} 项`) : ''}
       </div>
     </Dialog>
   );
@@ -2947,15 +2948,15 @@ function DestinationDialog({
       size={470}
       tone="accent"
       icon={<Icon name="folder" />}
-      title={mode === 'move' ? '移动到' : '复制到'}
-      description={`已选 ${sources.length} 项，选择目标文件夹。`}
+      title={mode === 'move' ? t('移动到') : t('复制到')}
+      description={t(`已选 ${sources.length} 项，选择目标文件夹。`)}
       actions={
         <>
           <Button variant="ghost" onClick={onClose}>
-            取消
+            {t('取消')}
           </Button>
           <Button variant="accent" disabled={!canConfirm || loading} onClick={() => onConfirm(path)}>
-            {mode === 'move' ? '移动到此处' : '复制到此处'}
+            {mode === 'move' ? t('移动到此处') : t('复制到此处')}
           </Button>
         </>
       }
@@ -2963,7 +2964,7 @@ function DestinationDialog({
       <div className="wc-pathbar" style={{ marginBottom: 8 }}>
         <div className="wc-crumbs">
           <button className="wc-crumb" data-current={segments.length === 0} onClick={() => jump(0)}>
-            {rootName || '根目录'}
+            {rootName || t('根目录')}
           </button>
           {segments.map((segment, index) => (
             <span key={`${segment}-${index}`} style={{ display: 'inline-flex', alignItems: 'center' }}>
@@ -2981,9 +2982,9 @@ function DestinationDialog({
       </div>
 
       {loading ? (
-        <Empty text="正在读取…" />
+        <Empty text={t('正在读取…')} />
       ) : folders.length === 0 ? (
-        <Empty text={error ? '读不到这个目录' : '没有子文件夹'} />
+        <Empty text={error ? t('读不到这个目录') : t('没有子文件夹')} />
       ) : (
         <div className="wc-dirlist">
           {folders.map((folder) => (
@@ -3000,8 +3001,8 @@ function DestinationDialog({
         </div>
       )}
 
-      {blocked && <div className="wc-field__hint">不能移动/复制到自身或其子目录。</div>}
-      {!blocked && sameParent && <div className="wc-field__hint">已经在目标目录里了。</div>}
+      {blocked && <div className="wc-field__hint">{t('不能移动/复制到自身或其子目录。')}</div>}
+      {!blocked && sameParent && <div className="wc-field__hint">{t('已经在目标目录里了。')}</div>}
     </Dialog>
   );
 }
@@ -3038,6 +3039,7 @@ const ACCENT_HEX: Record<string, string> = {
   violet: '#7C5CE6',
 };
 
+// 同样只存中文，渲染时再 t()：模块级求值会冻住启动时的语言
 const PERMISSION_OPTIONS = [
   { label: '只读', value: 3 },
   { label: '读写', value: 127 },
@@ -3062,7 +3064,7 @@ export function SharedPage({ openEditor = false }: { openEditor?: boolean }) {
 
   const addRoot = () =>
     action.run(async () => {
-      const folder = await pickFolder('选择要共享给设备的目录');
+      const folder = await pickFolder(t('选择要共享给设备的目录'));
       if (!folder) {
         return;
       }
@@ -3073,19 +3075,19 @@ export function SharedPage({ openEditor = false }: { openEditor?: boolean }) {
   return (
     <div className="wc-page">
       <div className="wc-section__head">
-        <span className="wc-section__hint">授权给已配对设备的本机目录</span>
+        <span className="wc-section__hint">{t('授权给已配对设备的本机目录')}</span>
         <div className="wc-section__action">
           <Button variant="accent" size="sm" disabled={!isDesktop() || action.busy} onClick={addRoot}>
             <Icon name="plus" size={16} />
-            添加目录
+            {t('添加目录')}
           </Button>
         </div>
       </div>
 
-      {roots.error && <Notice text={`读取失败：${roots.error}`} />}
+      {roots.error && <Notice text={t(`读取失败：${roots.error}`)} />}
 
       {rows.length === 0 ? (
-        <Empty text="还没有共享目录" />
+        <Empty text={t('还没有共享目录')} />
       ) : (
         <div className="wc-list">
           {rows.map((root, index) => {
@@ -3108,7 +3110,7 @@ export function SharedPage({ openEditor = false }: { openEditor?: boolean }) {
                   <div className="wc-perms">
                     {permissionNames.length === 0 ? (
                       <button className="wc-perm" onClick={() => setEditing(root)}>
-                        未授权设备
+                        {t('未授权设备')}
                       </button>
                     ) : (
                       permissionNames.map((name) => (
@@ -3116,22 +3118,22 @@ export function SharedPage({ openEditor = false }: { openEditor?: boolean }) {
                           className="wc-perm"
                           data-on="true"
                           key={name}
-                          title="点击编辑授权"
+                          title={t('点击编辑授权')}
                           onClick={() => setEditing(root)}
                         >
-                          {name}
+                          {t(name)}
                         </button>
                       ))
                     )}
                   </div>
                 </div>
                 <div className="wc-row__right">
-                  <Badge tone="neutral">{root.grants.length} 台设备</Badge>
+                  <Badge tone="neutral">{t(`${root.grants.length} 台设备`)}</Badge>
                   <Button
                     variant="ghost"
                     size="sm"
                     iconOnly
-                    aria-label="编辑授权"
+                    aria-label={t('编辑授权')}
                     onClick={() => setEditing(root)}
                   >
                     <Icon name="edit" size={16} />
@@ -3140,9 +3142,9 @@ export function SharedPage({ openEditor = false }: { openEditor?: boolean }) {
                     variant="ghost"
                     size="sm"
                     iconOnly
-                    aria-label="打开目录"
+                    aria-label={t('打开目录')}
                     disabled={!isDesktop()}
-                    onClick={() => action.run(() => openPath(root.path), '已打开目录')}
+                    onClick={() => action.run(() => openPath(root.path), t('已打开目录'))}
                   >
                     <Icon name="folderOpen" size={16} />
                   </Button>
@@ -3154,25 +3156,25 @@ export function SharedPage({ openEditor = false }: { openEditor?: boolean }) {
       )}
 
       <div className="wc-section__head" style={{ marginTop: 26 }}>
-        <h2 className="wc-section__title">权限说明</h2>
+        <h2 className="wc-section__title">{t('权限说明')}</h2>
       </div>
 
       <div className="wc-info">
         <div className="wc-info__row">
-          <span className="wc-info__label">浏览</span>
-          <span className="wc-info__value wc-info__value--muted">查看目录与文件列表，不写入</span>
+          <span className="wc-info__label">{t('浏览')}</span>
+          <span className="wc-info__value wc-info__value--muted">{t('查看目录与文件列表，不写入')}</span>
         </div>
         <div className="wc-info__row">
-          <span className="wc-info__label">下载</span>
-          <span className="wc-info__value wc-info__value--muted">把文件复制到设备本地</span>
+          <span className="wc-info__label">{t('下载')}</span>
+          <span className="wc-info__value wc-info__value--muted">{t('把文件复制到设备本地')}</span>
         </div>
         <div className="wc-info__row">
-          <span className="wc-info__label">上传 / 新建</span>
-          <span className="wc-info__value wc-info__value--muted">向目录写入文件与子目录</span>
+          <span className="wc-info__label">{t('上传 / 新建')}</span>
+          <span className="wc-info__value wc-info__value--muted">{t('向目录写入文件与子目录')}</span>
         </div>
         <div className="wc-info__row">
-          <span className="wc-info__label">重命名 / 移动 / 删除</span>
-          <span className="wc-info__value wc-info__value--muted">修改已有条目</span>
+          <span className="wc-info__label">{t('重命名 / 移动 / 删除')}</span>
+          <span className="wc-info__value wc-info__value--muted">{t('修改已有条目')}</span>
         </div>
       </div>
 
@@ -3234,7 +3236,7 @@ function EditRootDialog({
       await api.post(`/roots/${root.directoryId}/grants`, {
         grants: Object.entries(selected).map(([deviceId, permissions]) => ({ deviceId, permissions })),
       });
-      onDone('已保存授权');
+      onDone(t('已保存授权'));
     } catch (caught) {
       onDone(caught instanceof Error ? caught.message : String(caught));
     }
@@ -3243,7 +3245,7 @@ function EditRootDialog({
   const remove = async () => {
     try {
       await api.del(`/roots/${root.directoryId}`);
-      onDone(`已取消共享「${root.name}」，文件仍在原处`);
+      onDone(t(`已取消共享「${root.name}」，文件仍在原处`));
     } catch (caught) {
       onDone(caught instanceof Error ? caught.message : String(caught));
     }
@@ -3255,15 +3257,15 @@ function EditRootDialog({
       onOpenChange={(open) => !open && onClose()}
       size={520}
       icon={<Icon name="shield" />}
-      title={`「${root.name}」的访问权限`}
+      title={t(`「${root.name}」的访问权限`)}
       description={root.path}
       actions={
         <>
           <Button variant="ghost" onClick={onClose}>
-            取消
+            {t('取消')}
           </Button>
           <Button variant="accent" onClick={save}>
-            保存
+            {t('保存')}
           </Button>
         </>
       }
@@ -3271,7 +3273,7 @@ function EditRootDialog({
       <div style={{ display: 'grid', gap: 8, marginTop: 4 }}>
         {devices.length === 0 && (
           <div style={{ font: '450 12.5px/1.5 var(--ok-font)', color: 'var(--ok-text-3)' }}>
-            还没有配对设备，先配对再授权。
+            {t('还没有配对设备，先配对再授权。')}
           </div>
         )}
 
@@ -3310,7 +3312,7 @@ function EditRootDialog({
                 <div style={{ font: '600 13.5px/1.35 var(--ok-font)', color: 'var(--ok-text)' }}>{device.name}</div>
                 <div style={{ font: '450 12px/1.4 var(--ok-font)', color: 'var(--ok-text-3)', marginTop: 2 }}>
                   {device.platform}
-                  {device.online ? ' · 在线' : ' · 离线'}
+                  {device.online ? t(' · 在线') : t(' · 离线')}
                 </div>
               </div>
               <select
@@ -3330,7 +3332,7 @@ function EditRootDialog({
               >
                 {PERMISSION_OPTIONS.map((option) => (
                   <option key={option.value} value={option.value}>
-                    {option.label}
+                    {t(option.label)}
                   </option>
                 ))}
               </select>
@@ -3340,23 +3342,23 @@ function EditRootDialog({
 
         {orphans.length > 0 && (
           <div style={{ font: '450 12px/1.5 var(--ok-font)', color: 'var(--ok-warning-text)' }}>
-            有 {orphans.length} 条授权指向已移除的设备，保存后会一并清除。
+            {t(`有 ${orphans.length} 条授权指向已移除的设备，保存后会一并清除。`)}
           </div>
         )}
 
         <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
           <Button variant="ghost" size="sm" onClick={() => setConfirmRemove((v) => !v)}>
-            {confirmRemove ? '取消' : '取消共享'}
+            {confirmRemove ? t('取消') : t('取消共享')}
           </Button>
           {confirmRemove && (
             <Button variant="danger" size="sm" onClick={remove}>
-              确认取消共享
+              {t('确认取消共享')}
             </Button>
           )}
         </div>
         {confirmRemove && (
           <div style={{ font: '450 12px/1.5 var(--ok-font)', color: 'var(--ok-text-3)' }}>
-            只删共享记录与授权，目录与里面的文件不会被删除。
+            {t('只删共享记录与授权，目录与里面的文件不会被删除。')}
           </div>
         )}
       </div>
@@ -3390,7 +3392,7 @@ function AddRootDialog({
         name,
         grants: Object.entries(selected).map(([deviceId, permissions]) => ({ deviceId, permissions })),
       });
-      onDone(`已共享「${name}」`);
+      onDone(t(`已共享「${name}」`));
     } catch (caught) {
       onDone(caught instanceof Error ? caught.message : String(caught));
     }
@@ -3402,15 +3404,15 @@ function AddRootDialog({
       onOpenChange={(open) => !open && onClose()}
       size={520}
       icon={<Icon name="folder" />}
-      title="添加共享目录"
+      title={t('添加共享目录')}
       description={folder}
       actions={
         <>
           <Button variant="ghost" onClick={onClose}>
-            取消
+            {t('取消')}
           </Button>
           <Button variant="accent" onClick={submit}>
-            共享
+            {t('共享')}
           </Button>
         </>
       }
@@ -3418,7 +3420,7 @@ function AddRootDialog({
       <div style={{ display: 'grid', gap: 8, marginTop: 4 }}>
         {devices.length === 0 && (
           <div style={{ font: '450 12.5px/1.5 var(--ok-font)', color: 'var(--ok-text-3)' }}>
-            还没有配对设备，先配对再授权。
+            {t('还没有配对设备，先配对再授权。')}
           </div>
         )}
         {devices.map((device) => {
@@ -3475,7 +3477,7 @@ function AddRootDialog({
               >
                 {PERMISSION_OPTIONS.map((option) => (
                   <option key={option.value} value={option.value}>
-                    {option.label}
+                    {t(option.label)}
                   </option>
                 ))}
               </select>
@@ -3489,25 +3491,25 @@ function AddRootDialog({
 
 /* ===================== 设置 ===================== */
 
-export function SettingsPage({ initialTab = '常规' }: { initialTab?: string }) {
+export function SettingsPage({ initialTab = t('常规') }: { initialTab?: string }) {
   const [tab, setTab] = useState(initialTab);
   const settings = useApi<SettingsSnapshot>('/settings', 0);
   const { resolvedTheme, setTheme, accent, setAccent } = useOink();
   const action = useAction();
 
-  const tabs = ['常规', '连接', '传输', '外观', '高级'];
+  const tabs = [t('常规'), t('连接'), t('传输'), t('外观'), t('高级')];
 
   // 改接收目录：选目录 → 落库 → 服务端立刻换落点。只影响之后接收的文件。
   const changeReceivedDirectory = () =>
     action.run(async () => {
-      const path = await pickFolder('选择接收目录');
+      const path = await pickFolder(t('选择接收目录'));
       if (!path) {
         return;
       }
 
       const result = await api.post<{ path: string }>('/settings/received-directory', { path });
       settings.reload();
-      return `接收目录已改为 ${result.path}`;
+      return t(`接收目录已改为 ${result.path}`);
     }, undefined);
   const data = settings.data;
 
@@ -3530,25 +3532,25 @@ export function SettingsPage({ initialTab = '常规' }: { initialTab?: string })
         </nav>
 
         <div>
-          {settings.error && <Notice text={`读取失败：${settings.error}`} />}
+          {settings.error && <Notice text={t(`读取失败：${settings.error}`)} />}
 
-          {tab === '常规' && (
+          {tab === t('常规') && (
             <section className="wc-section" style={{ marginBottom: 0 }}>
               <div className="wc-info">
                 <div className="wc-info__row">
-                  <span className="wc-info__label">版本</span>
+                  <span className="wc-info__label">{t('版本')}</span>
                   <span className="wc-info__value">{data?.version ?? '—'}</span>
                 </div>
                 <div className="wc-info__row">
-                  <span className="wc-info__label">本机名</span>
+                  <span className="wc-info__label">{t('本机名')}</span>
                   <span className="wc-info__value">{data?.machineName ?? '—'}</span>
                 </div>
                 <div className="wc-info__row">
-                  <span className="wc-info__label">已配对设备</span>
-                  <span className="wc-info__value">{data?.pairedDevices ?? 0} 台</span>
+                  <span className="wc-info__label">{t('已配对设备')}</span>
+                  <span className="wc-info__value">{t(`${data?.pairedDevices ?? 0} 台`)}</span>
                 </div>
                 <div className="wc-info__row">
-                  <span className="wc-info__label">接收目录</span>
+                  <span className="wc-info__label">{t('接收目录')}</span>
                   <span className="wc-info__value wc-info__value--muted">{data?.receivedDirectory ?? '—'}</span>
                   <Button
                     variant="ghost"
@@ -3556,48 +3558,48 @@ export function SettingsPage({ initialTab = '常规' }: { initialTab?: string })
                     disabled={!isDesktop() || action.busy}
                     onClick={changeReceivedDirectory}
                   >
-                    更改
+                    {t('更改')}
                   </Button>
                   <button
                     className="wc-copy"
-                    aria-label="打开接收目录"
+                    aria-label={t('打开接收目录')}
                     disabled={!isDesktop()}
-                    onClick={() => action.run(() => openPath(data?.receivedDirectory ?? ''), '已打开')}
+                    onClick={() => action.run(() => openPath(data?.receivedDirectory ?? ''), t('已打开'))}
                   >
                     <Icon name="folderOpen" size={13} />
                   </button>
                 </div>
-                <div className="wc-field__hint">只影响之后接收的文件，已收到的文件不会搬家。</div>
+                <div className="wc-field__hint">{t('只影响之后接收的文件，已收到的文件不会搬家。')}</div>
               </div>
             </section>
           )}
 
-          {tab === '连接' && (
+          {tab === t('连接') && (
             <section className="wc-section" style={{ marginBottom: 0 }}>
               <div className="wc-info">
                 <div className="wc-info__row">
-                  <span className="wc-info__label">端口</span>
+                  <span className="wc-info__label">{t('端口')}</span>
                   <span className="wc-info__value">{data?.port ?? '—'}</span>
                 </div>
                 <div className="wc-info__row">
-                  <span className="wc-info__label">局域网地址</span>
+                  <span className="wc-info__label">{t('局域网地址')}</span>
                   <span className="wc-info__value">
                     {data?.addresses.length ? data.addresses.join(' · ') : '—'}
                   </span>
                 </div>
                 <div className="wc-info__row">
-                  <span className="wc-info__label">协议版本</span>
+                  <span className="wc-info__label">{t('协议版本')}</span>
                   <span className="wc-info__value">{data?.protocolVersion ?? '—'}</span>
                 </div>
                 <div className="wc-info__row">
-                  <span className="wc-info__label">证书指纹</span>
+                  <span className="wc-info__label">{t('证书指纹')}</span>
                   <span className="wc-info__value" style={{ wordBreak: 'break-all' }}>
                     {data?.fingerprint ?? '—'}
                   </span>
                   <button
                     className="wc-copy"
-                    aria-label="复制证书指纹"
-                    onClick={() => action.run(() => copyText(data?.fingerprint ?? ''), '已复制')}
+                    aria-label={t('复制证书指纹')}
+                    onClick={() => action.run(() => copyText(data?.fingerprint ?? ''), t('已复制'))}
                   >
                     <Icon name="copy" size={13} />
                   </button>
@@ -3606,11 +3608,11 @@ export function SettingsPage({ initialTab = '常规' }: { initialTab?: string })
             </section>
           )}
 
-          {tab === '传输' && (
+          {tab === t('传输') && (
             <section className="wc-section" style={{ marginBottom: 0 }}>
               <div className="wc-info">
                 <div className="wc-info__row">
-                  <span className="wc-info__label">接收目录</span>
+                  <span className="wc-info__label">{t('接收目录')}</span>
                   <span className="wc-info__value wc-info__value--muted">{data?.receivedDirectory ?? '—'}</span>
                   <Button
                     variant="ghost"
@@ -3618,33 +3620,33 @@ export function SettingsPage({ initialTab = '常规' }: { initialTab?: string })
                     disabled={!isDesktop() || action.busy}
                     onClick={changeReceivedDirectory}
                   >
-                    更改
+                    {t('更改')}
                   </Button>
                 </div>
-                <div className="wc-field__hint">只影响之后接收的文件，已收到的文件不会搬家。</div>
+                <div className="wc-field__hint">{t('只影响之后接收的文件，已收到的文件不会搬家。')}</div>
                 <div className="wc-info__row">
-                  <span className="wc-info__label">分块大小</span>
+                  <span className="wc-info__label">{t('分块大小')}</span>
                   <span className="wc-info__value">{data ? `${Math.round(data.chunkSize / 1024)} KB` : '—'}</span>
                 </div>
                 <div className="wc-info__row">
-                  <span className="wc-info__label">单设备并发</span>
-                  <span className="wc-info__value">{data?.maxActiveTransfers ?? '—'} 个任务</span>
+                  <span className="wc-info__label">{t('单设备并发')}</span>
+                  <span className="wc-info__value">{data?.maxActiveTransfers ?? '—'}{t(' 个任务')}</span>
                 </div>
               </div>
             </section>
           )}
 
-          {tab === '外观' && (
+          {tab === t('外观') && (
             <section className="wc-section" style={{ marginBottom: 0 }}>
               <div className="wc-field">
                 <span className="wc-info__label" style={{ width: 72 }}>
-                  主题
+                  {t('主题')}
                 </span>
                 <div style={{ display: 'flex', gap: 6 }}>
                   {(
                     [
-                      ['light', '浅色'],
-                      ['dark', '深色'],
+                      ['light', t('浅色')],
+                      ['dark', t('深色')],
                     ] as const
                   ).map(([key, label]) => (
                     <Button
@@ -3661,7 +3663,7 @@ export function SettingsPage({ initialTab = '常规' }: { initialTab?: string })
               </div>
               <div className="wc-field">
                 <span className="wc-info__label" style={{ width: 72 }}>
-                  强调色
+                  {t('强调色')}
                 </span>
                 <div className="wc-swatches">
                   {ACCENTS.map((key) => (
@@ -3679,26 +3681,26 @@ export function SettingsPage({ initialTab = '常规' }: { initialTab?: string })
             </section>
           )}
 
-          {tab === '高级' && (
+          {tab === t('高级') && (
             <section className="wc-section" style={{ marginBottom: 0 }}>
               <div className="wc-info">
                 <div className="wc-info__row">
-                  <span className="wc-info__label">本机界面地址</span>
+                  <span className="wc-info__label">{t('本机界面地址')}</span>
                   <span className="wc-info__value">https://127.0.0.1:{data?.port ?? '—'}/app/</span>
                 </div>
                 <div className="wc-info__row">
-                  <span className="wc-info__label">调试接口</span>
-                  <span className="wc-info__value wc-info__value--muted">/app/api（仅 loopback + 本机令牌）</span>
+                  <span className="wc-info__label">{t('调试接口')}</span>
+                  <span className="wc-info__value wc-info__value--muted">{t('/app/api（仅 loopback + 本机令牌）')}</span>
                 </div>
               </div>
               <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
-                <Button variant="soft" size="sm" disabled={!isDesktop()} onClick={() => action.run(() => openPath(data?.receivedDirectory ?? ''), '已打开接收目录')}>
+                <Button variant="soft" size="sm" disabled={!isDesktop()} onClick={() => action.run(() => openPath(data?.receivedDirectory ?? ''), t('已打开接收目录'))}>
                   <Icon name="folderOpen" size={16} />
-                  打开接收目录
+                  {t('打开接收目录')}
                 </Button>
-                <Button variant="soft" size="sm" onClick={() => action.run(() => copyText(`https://127.0.0.1:${data?.port ?? ''}/app/`), '已复制地址')}>
+                <Button variant="soft" size="sm" onClick={() => action.run(() => copyText(`https://127.0.0.1:${data?.port ?? ''}/app/`), t('已复制地址'))}>
                   <Icon name="copy" size={16} />
-                  复制界面地址
+                  {t('复制界面地址')}
                 </Button>
               </div>
             </section>

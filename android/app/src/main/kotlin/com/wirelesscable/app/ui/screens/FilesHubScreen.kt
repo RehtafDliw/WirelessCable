@@ -20,11 +20,12 @@ import androidx.compose.ui.unit.sp
 import com.wirelesscable.app.ui.components.WcSegmented
 import com.wirelesscable.app.ui.theme.WcColors
 import com.wirelesscable.app.ui.theme.WcSpace
+import com.wirelesscable.app.core.i18n.Str
 
 /** 文件管理页的两个来源。 */
 enum class FileSource(val label: String) {
-    Computer("电脑文件"),
-    Phone("传输目录"),
+    Computer(Str.t("电脑文件")),
+    Phone(Str.t("传输目录")),
 }
 
 /**

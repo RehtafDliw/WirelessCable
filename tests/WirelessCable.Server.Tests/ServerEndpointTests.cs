@@ -144,7 +144,8 @@ public sealed class ServerEndpointTests : IClassFixture<ServerFixture>
 
         Assert.Equal(32, device.DeviceId.Length);
         Assert.True(Guid.TryParseExact(device.DeviceId, "N", out _));
-        Assert.Equal("测试主机", device.DisplayName);
+        // 2.10.0 起对外显示名带四位短 ID：两台同名电脑靠它区分
+        Assert.Equal($"测试主机 · {device.DeviceId[..4].ToUpperInvariant()}", device.DisplayName);
         Assert.Equal(PlatformKind.Windows, device.Platform);
         Assert.Equal(_fixture.Port, device.Port);
         Assert.Equal(ProtocolConstants.CurrentVersion, device.ProtocolVersion);

@@ -46,18 +46,18 @@ public sealed class TrayIcon : IDisposable
             _window = window;
             _viewModel = viewModel;
 
-            _statusItem = new MenuItem { Header = "服务运行中", IsEnabled = false };
-            _serviceItem = new MenuItem { Header = "暂停服务" };
+            _statusItem = new MenuItem { Header = Loc.T("服务运行中", "Service running"), IsEnabled = false };
+            _serviceItem = new MenuItem { Header = Loc.T("暂停服务", "Pause service") };
             _serviceItem.Click += async (_, _) => await ToggleServiceAsync();
 
             // 新版界面是默认入口；旧界面保留为回退路径
-            var showNewItem = new MenuItem { Header = "新版界面" };
+            var showNewItem = new MenuItem { Header = Loc.T("新版界面", "New UI") };
             showNewItem.Click += (_, _) => _viewModel.OpenNewUiWindow();
 
-            var showItem = new MenuItem { Header = "旧版界面" };
+            var showItem = new MenuItem { Header = Loc.T("旧版界面", "Classic UI") };
             showItem.Click += (_, _) => ShowWindow();
 
-            var exitItem = new MenuItem { Header = "退出程序" };
+            var exitItem = new MenuItem { Header = Loc.T("退出程序", "Exit") };
             exitItem.Click += (_, _) => ExitApplication();
 
             _menu = new ContextMenu();
@@ -180,18 +180,18 @@ public sealed class TrayIcon : IDisposable
                 if (running)
                 {
                     await _viewModel.Server.StopAsync();
-                    ShowBalloon("服务已暂停，手机将无法连接");
+                    ShowBalloon(Loc.T("服务已暂停，手机将无法连接", "Service paused — phones cannot connect"));
                 }
                 else
                 {
                     await _viewModel.Server.StartAsync();
-                    ShowBalloon("服务已恢复");
+                    ShowBalloon(Loc.T("服务已恢复", "Service resumed"));
                 }
             }
             catch (Exception ex)
             {
                 Serilog.Log.Error(ex, "托盘切换服务状态失败");
-                ShowBalloon("切换服务状态失败，详见日志");
+                ShowBalloon(Loc.T("切换服务状态失败，详见日志", "Failed to toggle the service — see logs"));
             }
 
             await _viewModel.RefreshAsync();
@@ -224,9 +224,11 @@ public sealed class TrayIcon : IDisposable
             var snapshot = _viewModel.Server.Snapshot();
             var running = snapshot.State == Core.Diagnostics.ServiceState.Running;
 
-            _statusItem.Header = running ? "服务运行中" : "服务已暂停";
-            _serviceItem.Header = running ? "暂停服务" : "恢复服务";
-            _icon.Text = running ? "WirelessCable · 服务运行中" : "WirelessCable · 服务已暂停";
+            _statusItem.Header = running ? Loc.T("服务运行中", "Service running") : Loc.T("服务已暂停", "Service paused");
+            _serviceItem.Header = running ? Loc.T("暂停服务", "Pause service") : Loc.T("恢复服务", "Resume service");
+            _icon.Text = running
+                ? Loc.T("WirelessCable · 服务运行中", "WirelessCable · service running")
+                : Loc.T("WirelessCable · 服务已暂停", "WirelessCable · service paused");
         }
 
         public void ShowBalloon(string text)

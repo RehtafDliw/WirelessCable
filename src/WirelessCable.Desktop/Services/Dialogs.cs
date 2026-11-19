@@ -12,12 +12,12 @@ namespace WirelessCable.Desktop.Services;
 public static class Dialogs
 {
     /// <summary>询问。返回 true 表示用户点了主按钮。</summary>
-    public static bool Confirm(string title, string message, string confirmText = "确定", bool danger = false)
-        => ConfirmDialog.Confirm(CurrentOwner, title, message, confirmText, danger);
+    public static bool Confirm(string title, string message, string? confirmText = null, bool danger = false)
+        => ConfirmDialog.Confirm(CurrentOwner, title, message, confirmText ?? Loc.T("确定", "OK"), danger);
 
     /// <summary>只告知，不询问。</summary>
-    public static void Alert(string title, string message, string confirmText = "知道了")
-        => ConfirmDialog.Alert(CurrentOwner, title, message, confirmText);
+    public static void Alert(string title, string message, string? confirmText = null)
+        => ConfirmDialog.Alert(CurrentOwner, title, message, confirmText ?? Loc.T("知道了", "Got it"));
 
     private static Window? CurrentOwner => Application.Current?.MainWindow;
 }

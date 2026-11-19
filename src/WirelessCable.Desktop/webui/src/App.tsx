@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useReducer, useRef, useState } from 'react';
 import { Badge, Button, Dialog, useOink } from 'oink-ui';
 import { Icon } from './Icon';
 import { api, type DevicesResponse, type Status } from './api';
@@ -15,14 +15,15 @@ import {
 } from './pages';
 import { AndroidHome, StatesBoard } from './mobile';
 
+import { getLang, setLang, subscribeLang, t } from './i18n';
 /** 左侧导航项——与 WPF 版 MainViewModel 的分区一一对应 */
 const NAV = [
-  { key: 'home', label: '首页', icon: 'home' as const },
-  { key: 'files', label: '手机文件', icon: 'phone' as const },
-  { key: 'devices', label: '设备管理', icon: 'users' as const },
-  { key: 'transfers', label: '传输中心', icon: 'download' as const },
-  { key: 'shared', label: '共享目录', icon: 'folder' as const },
-  { key: 'settings', label: '设置', icon: 'settings' as const },
+  { key: 'home', zh: '首页', icon: 'home' as const },
+  { key: 'files', zh: '手机文件', icon: 'phone' as const },
+  { key: 'devices', zh: '设备管理', icon: 'users' as const },
+  { key: 'transfers', zh: '传输中心', icon: 'download' as const },
+  { key: 'shared', zh: '共享目录', icon: 'folder' as const },
+  { key: 'settings', zh: '设置', icon: 'settings' as const },
 ];
 
 const TITLES: Record<string, { title: string; sub: string }> = {
@@ -35,6 +36,10 @@ const TITLES: Record<string, { title: string; sub: string }> = {
 };
 
 export function App() {
+  // 语言切换：订阅后强制重渲染，页面与状态都保留（不 remount）
+  const [, bumpLang] = useReducer((x: number) => x + 1, 0);
+  useEffect(() => subscribeLang(bumpLang), []);
+
   // 样张渲染用：?page=home&theme=dark 直接定位到某个页面与主题
   const params = new URLSearchParams(window.location.search);
   const view = params.get('view');
@@ -66,12 +71,12 @@ export function App() {
     }
 
     if (!isDesktop()) {
-      setSelfCheck('不在桌面窗口里');
+      setSelfCheck(t('不在桌面窗口里'));
       return;
     }
 
     host('copyText', { text: 'wc-selfcheck-ok' })
-      .then((reply) => setSelfCheck(reply.ok ? '宿主桥可用' : (reply.error ?? '失败')))
+      .then((reply) => setSelfCheck(reply.ok ? t('宿主桥可用') : (reply.error ?? t('失败'))))
       .catch((error: unknown) => setSelfCheck(error instanceof Error ? error.message : String(error)));
   }, [params]);
 
@@ -112,12 +117,12 @@ export function App() {
             <Icon name="cable" />
           </div>
           <div>
-            <div className="wc-brand__name">无线数据线</div>
+            <div className="wc-brand__name">{t('无线数据线')}</div>
             <div className="wc-brand__ver">{status.data?.version ?? '—'}</div>
           </div>
         </div>
 
-        <nav className="wc-nav" aria-label="主导航">
+        <nav className="wc-nav" aria-label={t('主导航')}>
           {NAV.map((item) => (
             <button
               key={item.key}
@@ -126,7 +131,7 @@ export function App() {
               onClick={() => setPage(item.key)}
             >
               <Icon name={item.icon} />
-              <span>{item.label}</span>
+              <span>{t(item.zh)}</span>
               {item.key === 'devices' && pending.length > 0 && (
                 <span className="wc-navitem__badge">{pending.length}</span>
               )}
@@ -137,15 +142,33 @@ export function App() {
 
           <button className="wc-navitem" onClick={() => setGrantOpen(true)}>
             <Icon name="shield" />
-            <span>设备授权</span>
+            <span>{t('设备授权')}</span>
             {pending.length > 0 && <span className="wc-navitem__badge">{pending.length}</span>}
           </button>
         </nav>
 
+        <button
+          onClick={() => setLang(getLang() === 'zh' ? 'en' : 'zh')}
+          style={{
+            margin: '8px 16px 12px',
+            padding: '6px 10px',
+            border: '1px solid var(--ok-line)',
+            borderRadius: 8,
+            background: 'transparent',
+            color: 'var(--ok-text-2)',
+            cursor: 'pointer',
+            font: '500 12px/1 var(--ok-font)',
+            textAlign: 'left',
+          }}
+          title={getLang() === 'zh' ? 'Switch to English' : '切换到中文'}
+        >
+          {getLang() === 'zh' ? 'English' : '中文'}
+        </button>
+
         <div className="wc-status">
           <span className="wc-status__dot" />
           <div className="wc-status__text">
-            <b>{status.data?.state === 'Running' ? '服务运行中' : (status.error ?? '读取中')}</b>
+            <b>{status.data?.state === 'Running' ? t('服务运行中') : (status.error ?? t('读取中'))}</b>
             {status.data?.addresses[0] ?? '127.0.0.1'}
             {status.data?.port ? `:${status.data.port}` : ''}
           </div>
@@ -156,19 +179,19 @@ export function App() {
       <div className="wc-main">
         <header className="wc-topbar">
           <div>
-            <div className="wc-topbar__title">{meta.title}</div>
-            <div className="wc-topbar__sub">{meta.sub}</div>
+            <div className="wc-topbar__title">{t(meta.title)}</div>
+            <div className="wc-topbar__sub">{t(meta.sub)}</div>
           </div>
           <div className="wc-topbar__right">
             <Button variant="soft" size="sm" onClick={() => setQrOpen(true)}>
               <Icon name="qr" size={16} />
-              配对码
+              {t('配对码')}
             </Button>
             <Button
               variant="ghost"
               size="sm"
               iconOnly
-              aria-label="切换主题"
+              aria-label={t('切换主题')}
               onClick={() => setTheme(resolvedTheme === 'light' ? 'dark' : 'light')}
             >
               <Icon name={resolvedTheme === 'light' ? 'moon' : 'sun'} />
@@ -177,7 +200,7 @@ export function App() {
               variant="ghost"
               size="sm"
               iconOnly
-              aria-label="刷新"
+              aria-label={t('刷新')}
               onClick={() => {
                 setNonce((n) => n + 1);
                 devices.reload();
@@ -205,7 +228,7 @@ export function App() {
           {page === 'devices' && <DevicesPage />}
           {page === 'transfers' && <TransfersPage />}
           {page === 'shared' && <SharedPage openEditor={params.get('dialog') === 'root'} />}
-          {page === 'settings' && <SettingsPage initialTab={params.get('tab') ?? '常规'} />}
+          {page === 'settings' && <SettingsPage initialTab={params.get('tab') ?? t('常规')} />}
         </div>
       </div>
 
@@ -224,7 +247,7 @@ export function App() {
             zIndex: 50,
           }}
         >
-          自检：{selfCheck}
+          {t('自检：')}{selfCheck}
         </div>
       )}
 
@@ -272,25 +295,25 @@ function GrantDialog({
       size={460}
       icon={<Icon name="shield" />}
       tone="accent"
-      title={request ? '有设备请求配对' : '没有待授权的请求'}
+      title={request ? t('有设备请求配对') : t('没有待授权的请求')}
       description={
         request
           ? `${request.deviceName} · ${request.platform}`
-          : '手机发起配对后，这里会出现六位校验码。'
+          : t('手机发起配对后，这里会出现六位校验码。')
       }
       actions={
         request ? (
           <>
             <Button variant="ghost" onClick={() => decide(false)}>
-              拒绝
+              {t('拒绝')}
             </Button>
             <Button variant="accent" onClick={() => decide(true)}>
-              允许访问
+              {t('允许访问')}
             </Button>
           </>
         ) : (
           <Button variant="soft" onClick={() => onOpenChange(false)}>
-            关闭
+            {t('关闭')}
           </Button>
         )
       }
@@ -298,7 +321,7 @@ function GrantDialog({
       {request ? (
         <div style={{ display: 'grid', gap: 8, marginTop: 4 }}>
           <div style={{ font: '450 12.5px/1.5 var(--ok-font)', color: 'var(--ok-text-3)' }}>
-            核对手机上的六位码与下面一致再允许。
+            {t('核对手机上的六位码与下面一致再允许。')}
           </div>
           <div
             style={{
@@ -318,7 +341,7 @@ function GrantDialog({
           </div>
           {pending.length > 1 && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Badge tone="warning">还有 {pending.length - 1} 个请求排队</Badge>
+              <Badge tone="warning">{t('还有 ')}{pending.length - 1}{t(' 个请求排队')}</Badge>
             </div>
           )}
           {error && (

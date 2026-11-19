@@ -6,7 +6,7 @@
       versionName / versionCode，两边要一起改）。
       build-desktop.sh 也从这里读版本，产物文件名跟着走。
     -->
-    <Version>2.9.0</Version>
+    <Version>2.10.0</Version>
 
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>

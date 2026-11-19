@@ -277,7 +277,7 @@ public sealed class PairingService : IDisposable
                 ExpiresAtUnixMs = session.ExpiresAt.ToUnixTimeMilliseconds(),
                 State = session.State,
                 ServerDeviceId = identity.DeviceId,
-                ServerName = identity.DisplayName,
+                ServerName = identity.UniqueName,
                 PairingSuite = ProtocolConstants.PairingSuite,
             },
             null,

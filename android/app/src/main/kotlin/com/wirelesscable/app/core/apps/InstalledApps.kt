@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import com.wirelesscable.app.core.i18n.Str
 import java.io.File
 
 /**
@@ -32,7 +33,7 @@ data class InstalledApp(
     /** 读不到字节的包不隐藏，但界面上标出来，免得用户点了才发现失败。 */
     val readable: Boolean get() = parts.isNotEmpty() && parts.all { it.sizeBytes > 0L }
 
-    val versionText: String get() = versionName?.takeIf { it.isNotBlank() } ?: "未知版本"
+    val versionText: String get() = versionName?.takeIf { it.isNotBlank() } ?: Str.t("未知版本")
 }
 
 object InstalledApps {

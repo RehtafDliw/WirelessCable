@@ -236,7 +236,7 @@ public partial class WebUiWindow : Window
                     var path = GetString(root, "path");
                     if (string.IsNullOrWhiteSpace(path))
                     {
-                        Reply(id, false, "缺少路径");
+                        Reply(id, false, "missing_path");
                         return;
                     }
 
@@ -253,7 +253,7 @@ public partial class WebUiWindow : Window
                     var path = GetString(root, "path");
                     if (string.IsNullOrWhiteSpace(path))
                     {
-                        Reply(id, false, "缺少路径");
+                        Reply(id, false, "missing_path");
                         return;
                     }
 
@@ -312,7 +312,7 @@ public partial class WebUiWindow : Window
                             Close();
                             break;
                         default:
-                            Reply(id, false, "未知窗口动作");
+                            Reply(id, false, "unknown_window_action");
                             return;
                     }
 
@@ -327,7 +327,7 @@ public partial class WebUiWindow : Window
                         !(url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
                           url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)))
                     {
-                        Reply(id, false, "只允许 http/https");
+                        Reply(id, false, "scheme_not_allowed");
                         return;
                     }
 
@@ -337,7 +337,8 @@ public partial class WebUiWindow : Window
                 }
 
                 default:
-                    Reply(id, false, $"未知动作：{action}");
+                    Log.Warning("未知宿主动作 {Action}", action);
+                    Reply(id, false, "unknown_action");
                     return;
             }
         }

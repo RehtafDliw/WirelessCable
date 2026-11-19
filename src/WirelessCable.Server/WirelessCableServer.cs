@@ -282,7 +282,7 @@ public sealed class WirelessCableServer : IAsyncDisposable
 
         var payload = _qr.CreatePayload(
             identity.DeviceId,
-            identity.DisplayName,
+            identity.UniqueName,
             snapshot.Addresses,
             snapshot.Port.Value,
             snapshot.Fingerprint,
@@ -350,7 +350,7 @@ public sealed class WirelessCableServer : IAsyncDisposable
             // mDNS 必须在拿到真实端口后广播，否则二维码与 SRV 记录会指向错误端口
             _mdns.Start(
                 identity.DeviceId,
-                identity.DisplayName,
+                identity.UniqueName,
                 port,
                 certificate.Fingerprint,
                 ProtocolConstants.CurrentVersion,

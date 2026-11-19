@@ -53,6 +53,7 @@ import com.wirelesscable.app.vm.InboxUiState
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import com.wirelesscable.app.core.i18n.Str
 
 /**
  * 「传输目录」：电脑发到手机的文件，按时间倒序（含当面直连落在 `直连/` 的那批）。
@@ -89,26 +90,27 @@ fun InboxScreen(
         ) {
             if (state.hasSelection) {
                 Text(
-                    text = state.selectionText,
+                    text = Str.t(state.selectionText),
                     fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = WcColors.Text2,
                     modifier = Modifier.weight(1f),
                 )
-                WcLinkButton(text = "全选", onClick = onSelectAll, color = WcColors.Muted)
-                WcLinkButton(text = "完成", onClick = onClearSelection, color = WcColors.Muted)
+                WcLinkButton(text = Str.t("全选"), onClick = onSelectAll, color = WcColors.Muted)
+                WcLinkButton(text = Str.t("完成"), onClick = onClearSelection, color = WcColors.Muted)
             } else {
                 Text(
-                    text = if (state.entries.isEmpty()) InboxStore.DISPLAY_NAME else "${state.entries.size} 个文件",
+                    text = if (state.entries.isEmpty()) InboxStore.DISPLAY_NAME else Str.t("${state.entries.size} 个文件"),
                     fontSize = 13.sp,
                     color = WcColors.Muted,
                     modifier = Modifier.weight(1f),
                 )
-                WcLinkButton(text = "刷新", onClick = onRefresh, color = WcColors.Muted)
+                WcLinkButton(text = Str.t("刷新"), onClick = onRefresh, color = WcColors.Muted)
             }
         }
 
-        state.message?.let { message ->
+        state.message?.let { raw ->
+            val message = Str.t(raw)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -121,7 +123,7 @@ fun InboxScreen(
                     color = WcColors.Error,
                     modifier = Modifier.weight(1f),
                 )
-                WcLinkButton(text = "知道了", onClick = onDismissMessage, color = WcColors.Muted)
+                WcLinkButton(text = Str.t("知道了"), onClick = onDismissMessage, color = WcColors.Muted)
             }
         }
 
@@ -141,7 +143,7 @@ fun InboxScreen(
                 contentAlignment = Alignment.TopCenter,
             ) {
                 Text(
-                    text = if (state.loading) "读取中…" else "还没有收到文件",
+                    text = if (state.loading) Str.t("读取中…") else Str.t("还没有收到文件"),
                     fontSize = 13.sp,
                     color = WcColors.Muted,
                 )
@@ -174,15 +176,15 @@ fun InboxScreen(
         }
 
         if (state.hasSelection) {
-            WcSelectionBar(text = state.selectionText, onDone = onClearSelection) {
+            WcSelectionBar(text = Str.t(state.selectionText), onDone = onClearSelection) {
                 if (state.selected.size == 1) {
                     val entry = state.entries.firstOrNull { it.relativePath in state.selected }
                     if (entry != null) {
-                        WcLinkButton(text = "打开", onClick = { onOpen(entry) })
+                        WcLinkButton(text = Str.t("打开"), onClick = { onOpen(entry) })
                     }
                 }
                 WcLinkButton(
-                    text = "删除",
+                    text = Str.t("删除"),
                     onClick = { confirmingDelete = true },
                     color = WcColors.Error,
                 )
@@ -193,10 +195,10 @@ fun InboxScreen(
     if (confirmingDelete) {
         WcDialog(
             onDismissRequest = { confirmingDelete = false },
-            title = { Text("删除文件") },
+            title = { Text(Str.t("删除文件")) },
             text = {
                 Text(
-                    text = "删除 ${state.selected.size} 个文件？文件会从手机里删掉，不能恢复。",
+                    text = Str.t("删除 ${state.selected.size} 个文件？文件会从手机里删掉，不能恢复。"),
                     fontSize = 13.sp,
                     color = WcColors.Text,
                 )
@@ -208,11 +210,11 @@ fun InboxScreen(
                         onDeleteSelected()
                     },
                 ) {
-                    Text("删除", color = WcColors.Error)
+                    Text(Str.t("删除"), color = WcColors.Error)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { confirmingDelete = false }) { Text("取消") }
+                TextButton(onClick = { confirmingDelete = false }) { Text(Str.t("取消")) }
             },
         )
     }
@@ -223,19 +225,19 @@ private fun NotGrantedInbox(onOpenAllFiles: () -> Unit) {
     Column(modifier = Modifier.padding(horizontal = 16.dp)) {
         WcCard {
             Text(
-                text = "接收电脑文件需要「所有文件访问权」",
+                text = Str.t("接收电脑文件需要「所有文件访问权」"),
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium,
                 color = WcColors.Text,
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                text = "开启后，电脑发来的文件会出现在这里。",
+                text = Str.t("开启后，电脑发来的文件会出现在这里。"),
                 fontSize = 12.5.sp,
                 color = WcColors.Muted,
             )
             Spacer(Modifier.height(12.dp))
-            WcPrimaryButton(text = "去开启", onClick = onOpenAllFiles)
+            WcPrimaryButton(text = Str.t("去开启"), onClick = onOpenAllFiles)
         }
     }
 }
@@ -261,7 +263,7 @@ private fun InboxRow(
             .combinedClickable(
                 onClick = { if (selectionMode) onToggleSelect() else onOpen() },
                 onLongClick = { if (selectionMode) onToggleSelect() else onStartSelection() },
-                onLongClickLabel = "多选",
+                onLongClickLabel = Str.t("多选"),
             )
             .padding(horizontal = WcSpace.s3),
         verticalAlignment = Alignment.CenterVertically,

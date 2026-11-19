@@ -27,6 +27,7 @@ import com.wirelesscable.app.ui.theme.SquircleShape
 import com.wirelesscable.app.ui.theme.WcColors
 import com.wirelesscable.app.ui.theme.WcRadius
 import com.wirelesscable.app.ui.theme.WcSize
+import com.wirelesscable.app.core.i18n.Str
 
 /** 状态色调。 */
 enum class Tone { Ok, Idle, Error }
@@ -90,7 +91,7 @@ fun WipChip() {
             .background(WcColors.Wip)
             .padding(horizontal = 8.dp, vertical = 2.dp),
     ) {
-        Text(text = "开发中", color = WcColors.WipText, fontSize = 12.sp)
+        Text(text = Str.t("开发中"), color = WcColors.WipText, fontSize = 12.sp)
     }
 }
 
@@ -137,7 +138,7 @@ fun DetailRow(label: String, value: String, trailing: @Composable () -> Unit = {
     }
 }
 
-/** 主操作按钮。禁用时降低不透明度，不做"点了没反应"的沉默失败。 */
+/** 主操作按钮。禁用时降低不透明度，不做点了没反应的沉默失败。 */
 @Composable
 fun WcPrimaryButton(
     text: String,

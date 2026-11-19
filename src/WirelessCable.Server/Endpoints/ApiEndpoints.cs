@@ -112,7 +112,7 @@ public static class ApiEndpoints
         var info = new DeviceInfo
         {
             DeviceId = identity.DeviceId,
-            DisplayName = identity.DisplayName,
+            DisplayName = identity.UniqueName,
             Platform = PlatformKind.Windows,
             OsVersion = Environment.OSVersion.Version.ToString(),
             AppVersion = snapshot.AppVersion,

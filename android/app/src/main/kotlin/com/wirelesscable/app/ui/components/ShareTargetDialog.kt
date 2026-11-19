@@ -21,13 +21,14 @@ import androidx.compose.ui.unit.sp
 import com.wirelesscable.app.data.db.DeviceEntity
 import com.wirelesscable.app.ui.theme.WcColors
 import com.wirelesscable.app.ui.theme.WcSpace
+import com.wirelesscable.app.core.i18n.Str
 
 /**
  * 系统分享之后的落点选择。
  *
  * 只给两个方向：发到某台电脑（已配对的都列出来）或当面直连给对方手机扫。
  * 分享给的是**临时**读权限，这一页不能晾太久，所以点哪一行就直接开传，
- * 不再叠一层"确认发送"。
+ * 不再叠一层确认发送。
  */
 @Composable
 fun ShareTargetDialog(
@@ -46,7 +47,7 @@ fun ShareTargetDialog(
         onDismissRequest = { if (!busy) onDismiss() },
         title = {
             Text(
-                text = "发送到",
+                text = Str.t("发送到"),
                 fontSize = 16.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = WcColors.Text,
@@ -59,8 +60,8 @@ fun ShareTargetDialog(
 
                 devices.forEach { device ->
                     ShareRow(
-                        title = device.displayName,
-                        subtitle = if (device.deviceId == connectedDeviceId) "已连接" else "未连接",
+                        title = deviceLabel(device.displayName, device.deviceId),
+                        subtitle = if (device.deviceId == connectedDeviceId) Str.t("已连接") else Str.t("未连接"),
                         highlight = device.deviceId == connectedDeviceId,
                         enabled = !busy,
                         onClick = { onPickComputer(device.deviceId) },
@@ -69,7 +70,7 @@ fun ShareTargetDialog(
 
                 if (devices.isEmpty()) {
                     Text(
-                        text = "还没有配对电脑，可以直接用下面的当面直连",
+                        text = Str.t("还没有配对电脑，可以直接用下面的当面直连"),
                         fontSize = 13.sp,
                         color = WcColors.Muted,
                     )
@@ -82,8 +83,8 @@ fun ShareTargetDialog(
                 )
 
                 ShareRow(
-                    title = "当面直连",
-                    subtitle = "让对方扫码接收",
+                    title = Str.t("当面直连"),
+                    subtitle = Str.t("让对方扫码接收"),
                     enabled = !busy,
                     onClick = onPickDirect,
                 )
@@ -95,7 +96,7 @@ fun ShareTargetDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss, enabled = !busy) { Text("取消") }
+            TextButton(onClick = onDismiss, enabled = !busy) { Text(Str.t("取消")) }
         },
     )
 }

@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import com.wirelesscable.app.core.i18n.Str
 
 /** 目标目录选择时要执行的动作。 */
 enum class TargetOperation { MOVE, COPY }
@@ -440,19 +441,19 @@ class FileBrowserViewModel(
                             append(info.name)
                             append("\n")
                             if (info.isDirectory) {
-                                append("类型：文件夹")
+                                append(Str.t("类型：文件夹"))
                             } else {
-                                append("类型：文件")
-                                append("　大小：${formatSize(info.sizeBytes)}")
+                                append(Str.t("类型：文件"))
+                                append(Str.t("　大小：") + formatSize(info.sizeBytes))
                             }
                             append("\n")
-                            append("位置：${info.relativePath}")
+                            append(Str.t("位置：") + info.relativePath)
                             append("\n")
                             if (info.modifiedUnixMs > 0) {
-                                append("修改时间：${formatTime(info.modifiedUnixMs)}")
+                                append(Str.t("修改时间：") + formatTime(info.modifiedUnixMs))
                                 append("\n")
                             }
-                            append("可用操作：${describeCapabilities(info.capabilities)}")
+                            append(Str.t("可用操作：") + describeCapabilities(info.capabilities))
                         })
                     }
                 }
@@ -488,18 +489,18 @@ class FileBrowserViewModel(
 
     /** 能力位 → 面向用户的能力描述。 */
     private fun describeCapabilities(capabilities: Int): String {
-        if (capabilities == 0) return "无"
+        if (capabilities == 0) return Str.t("无")
 
         val parts = mutableListOf<String>()
-        if (capabilities and 1 != 0) parts += "浏览"
-        if (capabilities and 2 != 0) parts += "读取"
-        if (capabilities and 4 != 0) parts += "写入"
-        if (capabilities and 8 != 0) parts += "新建目录"
-        if (capabilities and 16 != 0) parts += "重命名"
-        if (capabilities and 32 != 0) parts += "删除"
-        if (capabilities and 64 != 0) parts += "移动"
-        if (capabilities and 128 != 0) parts += "查看信息"
-        return parts.joinToString("、")
+        if (capabilities and 1 != 0) parts += Str.t("浏览")
+        if (capabilities and 2 != 0) parts += Str.t("读取")
+        if (capabilities and 4 != 0) parts += Str.t("写入")
+        if (capabilities and 8 != 0) parts += Str.t("新建目录")
+        if (capabilities and 16 != 0) parts += Str.t("重命名")
+        if (capabilities and 32 != 0) parts += Str.t("删除")
+        if (capabilities and 64 != 0) parts += Str.t("移动")
+        if (capabilities and 128 != 0) parts += Str.t("查看信息")
+        return parts.joinToString(if (Str.english) ", " else "、")
     }
 
     /** 多选：点一下切换选中状态。 */

@@ -125,7 +125,9 @@ public partial class App : Application
             }
             catch (Exception fatal)
             {
-                Dialogs.Alert("无法启动", $"无法创建应用目录：{fatal.Message}");
+                Dialogs.Alert(
+                    Loc.T("无法启动", "Cannot start"),
+                    Loc.T($"无法创建应用目录：{fatal.Message}", $"Cannot create the app folder: {fatal.Message}"));
                 Shutdown(1);
                 return;
             }
@@ -142,7 +144,11 @@ public partial class App : Application
         if (directoryWarning is not null)
         {
             Log.Warning("自定义数据目录不可用，已退回默认目录：{Error}", directoryWarning);
-            Dialogs.Alert("数据目录不可用", $"无法使用设置里的数据目录，已改用默认目录。\n\n{directoryWarning}");
+            Dialogs.Alert(
+                Loc.T("数据目录不可用", "Data folder unavailable"),
+                Loc.T(
+                    $"无法使用设置里的数据目录，已改用默认目录。\n\n{directoryWarning}",
+                    $"The data folder in settings is unusable; falling back to the default one.\n\n{directoryWarning}"));
         }
 
         var database = new SqliteDatabaseFactory(paths.DatabasePath);
@@ -210,7 +216,9 @@ public partial class App : Application
 
         if (_server.Snapshot().State == ServiceState.Failed)
         {
-            Dialogs.Alert("服务启动失败", $"本地服务启动失败：{_server.Snapshot().LastError}");
+            Dialogs.Alert(
+                Loc.T("服务启动失败", "Service failed to start"),
+                Loc.T($"本地服务启动失败：{_server.Snapshot().LastError}", $"The local service failed to start: {_server.Snapshot().LastError}"));
         }
     }
 
@@ -236,9 +244,11 @@ public partial class App : Application
 
             case FirewallStatus.ElevationRequired:
                 var confirm = Dialogs.Confirm(
-                    "放行本机端口",
-                    $"需要放行本机端口 {port}，手机才能连接。\n\n点「继续」将请求管理员权限完成配置，不需要你手动设置防火墙。",
-                    confirmText: "继续");
+                    Loc.T("放行本机端口", "Allow the local port"),
+                    Loc.T(
+                        $"需要放行本机端口 {port}，手机才能连接。\n\n点「继续」将请求管理员权限完成配置，不需要你手动设置防火墙。",
+                        $"Port {port} must be allowed so phones can connect.\n\nClick Continue to request administrator rights and configure it — no need to touch the firewall yourself."),
+                    confirmText: Loc.T("继续", "Continue"));
 
                 if (confirm)
                 {
@@ -374,7 +384,9 @@ public partial class App : Application
             _handlingUiException = true;
             try
             {
-                Dialogs.Alert("出现错误", $"发生未处理的错误，已记录到日志：{args.Exception.Message}");
+                Dialogs.Alert(
+                    Loc.T("出现错误", "Something went wrong"),
+                    Loc.T($"发生未处理的错误，已记录到日志：{args.Exception.Message}", $"An unhandled error occurred and was logged: {args.Exception.Message}"));
                 args.Handled = true;
             }
             finally

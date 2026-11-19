@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
+import com.wirelesscable.app.core.i18n.Str
 import kotlinx.coroutines.launch
 import java.io.File
 import java.text.SimpleDateFormat
@@ -213,7 +214,8 @@ class TransferViewModel(
     fun materializeShareText(text: String): UploadItem? {
         val directory = File(tempDir, "share").apply { mkdirs() }
         val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
-        val file = File(directory, "分享文本-$stamp.txt")
+        // 文件名会原样落到电脑上，英文界面下别出现中文
+        val file = File(directory, "${Str.t("分享文本")}-$stamp.txt")
 
         try {
             file.writeText(text)

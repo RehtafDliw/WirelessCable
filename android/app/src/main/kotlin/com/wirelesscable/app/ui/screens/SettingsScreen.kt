@@ -64,6 +64,10 @@ import com.wirelesscable.app.core.sync.SessionSyncEngine
 import com.wirelesscable.app.vm.LocalRootInfo
 import com.wirelesscable.app.vm.ConnectionUiState
 import com.wirelesscable.app.vm.PairingUiState
+import com.wirelesscable.app.core.i18n.LangMode
+import com.wirelesscable.app.core.i18n.LangState
+import com.wirelesscable.app.core.i18n.Str
+import com.wirelesscable.app.ui.components.deviceLabel
 
 /**
  * 设置：已配对设备（含按设备授权）、服务管理、通知、主题、关于。
@@ -75,7 +79,7 @@ import com.wirelesscable.app.vm.PairingUiState
 fun SettingsScreen(
     state: ConnectionUiState,
     pairing: PairingUiState,
-    /** 手机本地真实授权（与服务器是否收到无关）。只用来提示"还没同步到电脑"。 */
+    /** 手机本地真实授权（与服务器是否收到无关）。只用来提示还没同步到电脑。 */
     localRoots: List<LocalRootInfo>,
     /** 服务器已经收到的根数量；少于本地数量说明同步还没跟上。 */
     syncedRootCount: Int,
@@ -110,7 +114,7 @@ fun SettingsScreen(
             .verticalScroll(rememberScrollState())
             .padding(16.dp),
     ) {
-        WcSectionHeader("已配对设备")
+        WcSectionHeader(Str.t("已配对设备"))
 
         PairedDevicesSection(
             devices = pairing.pairedDevices,
@@ -127,7 +131,7 @@ fun SettingsScreen(
             val syncState by SessionSyncEngine.state.collectAsStateWithLifecycle()
             Spacer(Modifier.height(6.dp))
             Text(
-                text = "有 ${localRoots.size - syncedRootCount} 个授权还没同步到电脑" +
+                text = Str.t("有 ${localRoots.size - syncedRootCount} 个授权还没同步到电脑") +
                     (syncState.lastError?.let { "：$it" } ?: ""),
                 fontSize = 11.5.sp,
                 color = WcColors.Muted,
@@ -137,17 +141,17 @@ fun SettingsScreen(
         grantingDevice?.let { deviceId ->
             WcDialog(
                 onDismissRequest = { grantingDevice = null },
-                title = { Text("授权给这台电脑") },
+                title = { Text(Str.t("授权给这台电脑")) },
                 text = {
                     Column {
                         Text(
-                            text = "整机访问需要系统权限；目录授权只放开你选的那一层。",
+                            text = Str.t("整机访问需要系统权限；目录授权只放开你选的那一层。"),
                             fontSize = 12.5.sp,
                             color = WcColors.Muted,
                         )
                         Spacer(Modifier.height(8.dp))
                         Text(
-                            text = if (allFilesGranted) "允许整机访问" else "开启整机访问（需系统权限）",
+                            text = if (allFilesGranted) Str.t("允许整机访问") else Str.t("开启整机访问（需系统权限）"),
                             fontSize = 14.sp,
                             color = WcColors.Accent,
                             modifier = Modifier
@@ -158,7 +162,7 @@ fun SettingsScreen(
                                 .padding(vertical = 8.dp),
                         )
                         Text(
-                            text = "取消整机访问",
+                            text = Str.t("取消整机访问"),
                             fontSize = 14.sp,
                             color = WcColors.Text,
                             modifier = Modifier
@@ -169,7 +173,7 @@ fun SettingsScreen(
                                 .padding(vertical = 8.dp),
                         )
                         Text(
-                            text = "选择目录…",
+                            text = Str.t("选择目录…"),
                             fontSize = 14.sp,
                             color = WcColors.Accent,
                             modifier = Modifier
@@ -186,7 +190,7 @@ fun SettingsScreen(
                         if (folders.isNotEmpty()) {
                             Spacer(Modifier.height(6.dp))
                             Text(
-                                text = "已授权的目录",
+                                text = Str.t("已授权的目录"),
                                 fontSize = 11.5.sp,
                                 color = WcColors.Muted,
                             )
@@ -202,7 +206,7 @@ fun SettingsScreen(
                                         modifier = Modifier.weight(1f),
                                     )
                                     Text(
-                                        text = "撤销",
+                                        text = Str.t("撤销"),
                                         fontSize = 12.5.sp,
                                         color = WcColors.Error,
                                         modifier = Modifier
@@ -215,16 +219,16 @@ fun SettingsScreen(
                     }
                 },
                 confirmButton = {
-                    TextButton(onClick = { grantingDevice = null }) { Text("关闭") }
+                    TextButton(onClick = { grantingDevice = null }) { Text(Str.t("关闭")) }
                 },
             )
         }
 
-        WcSectionHeader("服务管理")
+        WcSectionHeader(Str.t("服务管理"))
 
         // 「有没有配对关系」要看真实的已配对设备，不能看手动配对输入框里的指纹：
         // 扫码/发现配对的设备不会往那个输入框写值，否则会出现
-        // "明明连着电脑，服务开关却是灰的"（1.1.2 修）。
+        // 明明连着电脑，服务开关却是灰的（1.1.2 修）。
         val paired = pairing.pairedDevices.isNotEmpty()
 
         SessionSyncCard(
@@ -233,52 +237,71 @@ fun SettingsScreen(
             onOpenAllFilesSettings = onOpenAllFilesSettings,
         )
 
-        WcSectionHeader("通知")
+        WcSectionHeader(Str.t("通知"))
 
         NotificationCard()
 
-        WcSectionHeader("外观")
+        WcSectionHeader(Str.t("外观"))
 
         WcCard {
-            Text(text = "主题", fontSize = 13.sp, color = WcColors.Muted)
+            Text(text = Str.t("主题"), fontSize = 13.sp, color = WcColors.Muted)
             Spacer(Modifier.height(8.dp))
 
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ThemeOption("跟随系统", WcThemeState.mode == ThemeMode.System) {
+                ThemeOption(Str.t("跟随系统"), WcThemeState.mode == ThemeMode.System) {
                     WcThemeState.set(context, ThemeMode.System)
                 }
-                ThemeOption("浅色", WcThemeState.mode == ThemeMode.Light) {
+                ThemeOption(Str.t("浅色"), WcThemeState.mode == ThemeMode.Light) {
                     WcThemeState.set(context, ThemeMode.Light)
                 }
-                ThemeOption("深色", WcThemeState.mode == ThemeMode.Dark) {
+                ThemeOption(Str.t("深色"), WcThemeState.mode == ThemeMode.Dark) {
                     WcThemeState.set(context, ThemeMode.Dark)
+                }
+            }
+
+            Spacer(Modifier.height(14.dp))
+            Text(text = Str.t("语言"), fontSize = 13.sp, color = WcColors.Muted)
+            Spacer(Modifier.height(8.dp))
+
+            // 语言独立于系统：手机是中文也能用英文界面，反之同理。
+            // 切换是即时的（LangState 是可观察状态），不重建 Activity，正在传的任务不受影响。
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ThemeOption(Str.t("跟随系统"), LangState.mode == LangMode.System) {
+                    LangState.set(context, LangMode.System)
+                }
+                ThemeOption("中文", LangState.mode == LangMode.Zh) {
+                    LangState.set(context, LangMode.Zh)
+                }
+                ThemeOption("English", LangState.mode == LangMode.En) {
+                    LangState.set(context, LangMode.En)
                 }
             }
         }
 
-        WcSectionHeader("关于")
+        WcSectionHeader(Str.t("关于"))
 
         WcCard {
-            DetailRow("应用", "WirelessCable ${BuildConfig.VERSION_NAME}")
+            DetailRow(Str.t("应用"), "WirelessCable ${BuildConfig.VERSION_NAME}")
 
             // 设备名优先取当前会话，其次取配对记录——
             // state.device 只在手动连接路径上有值，正常配对时是空的，
             // 直接显示 "-" 会让用户以为没连上。
-            val current = pairing.activeServer?.displayName
-                ?: pairing.pairedDevices.firstOrNull { it.deviceId == pairing.sessionDeviceId }?.displayName
+            val current = pairing.activeServer?.let { deviceLabel(it.displayName, it.deviceId) }
+                ?: pairing.pairedDevices.firstOrNull { it.deviceId == pairing.sessionDeviceId }
+                    ?.let { deviceLabel(it.displayName, it.deviceId) }
             if (current != null) {
-                DetailRow("电脑", current)
+                DetailRow(Str.t("电脑"), current)
             }
 
-            state.device?.osVersion?.let { os -> DetailRow("电脑系统", os) }
+            state.device?.osVersion?.let { os -> DetailRow(Str.t("电脑系统"), os) }
         }
 
         Spacer(Modifier.height(16.dp))
 
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            WcSectionHeader("高级", modifier = Modifier.weight(1f))
+            WcSectionHeader(Str.t("高级"), modifier = Modifier.weight(1f))
             WcLinkButton(
-                text = if (advanced) "收起" else "展开",
+                text = if (advanced) Str.t("收起") else Str.t("展开"),
                 onClick = { advanced = !advanced },
                 color = WcColors.Muted,
             )
@@ -289,7 +312,7 @@ fun SettingsScreen(
                 WcInput(
                     value = state.host,
                     onValueChange = onHostChanged,
-                    label = "电脑地址",
+                    label = Str.t("电脑地址"),
                     placeholder = "192.168.1.10",
                     enabled = !state.isBusy,
                 )
@@ -299,7 +322,7 @@ fun SettingsScreen(
                 WcInput(
                     value = state.port,
                     onValueChange = onPortChanged,
-                    label = "端口",
+                    label = Str.t("端口"),
                     enabled = !state.isBusy,
                 )
 
@@ -308,7 +331,7 @@ fun SettingsScreen(
                 WcInput(
                     value = state.fingerprint,
                     onValueChange = onFingerprintChanged,
-                    label = "证书指纹",
+                    label = Str.t("证书指纹"),
                     enabled = !state.isBusy,
                 )
 
@@ -316,18 +339,18 @@ fun SettingsScreen(
 
                 WcPrimaryButton(
                     text = when {
-                        state.isBusy -> "连接中…"
-                        state.isConnected -> "断开"
-                        else -> "连接"
+                        state.isBusy -> Str.t("连接中…")
+                        state.isConnected -> Str.t("断开")
+                        else -> Str.t("连接")
                     },
                     onClick = if (state.isConnected) onDisconnect else onConnect,
                     enabled = !state.isBusy,
                     soft = state.isConnected,
                 )
 
-                state.errorMessage?.let { error ->
+                state.errorMessage?.let { raw ->
                     Spacer(Modifier.height(8.dp))
-                    Text(text = error, color = WcColors.Error, fontSize = 12.5.sp)
+                    Text(text = Str.t(raw), color = WcColors.Error, fontSize = 12.5.sp)
                 }
             }
         }
@@ -358,7 +381,7 @@ private fun ThemeOption(text: String, selected: Boolean, onClick: () -> Unit) {
 /**
  * 通知卡片：显示真实授权状态，并能直接申请。
  *
- * 以前只有一个"打开通知设置"的跳转——用户点了不知道要开什么，
+ * 以前只有一个打开通知设置的跳转——用户点了不知道要开什么，
  * Android 13+ 其实可以直接弹权限框。
  */
 @Composable
@@ -381,14 +404,14 @@ private fun NotificationCard() {
     WcCard {
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = "通知权限",
+                text = Str.t("通知权限"),
                 fontSize = 15.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = WcColors.Text,
                 modifier = Modifier.weight(1f),
             )
             StatusPill(
-                text = if (granted) "已允许" else "未允许",
+                text = if (granted) Str.t("已允许") else Str.t("未允许"),
                 tone = if (granted) Tone.Ok else Tone.Idle,
             )
         }
@@ -396,7 +419,7 @@ private fun NotificationCard() {
         if (!granted) {
             Spacer(Modifier.height(6.dp))
             Text(
-                text = "服务照常运行，但看不到常驻通知与进度。",
+                text = Str.t("服务照常运行，但看不到常驻通知与进度。"),
                 fontSize = 12.5.sp,
                 color = WcColors.Muted,
             )
@@ -406,14 +429,14 @@ private fun NotificationCard() {
 
         if (!granted && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             WcPrimaryButton(
-                text = "允许通知",
+                text = Str.t("允许通知"),
                 onClick = { launcher.launch(Manifest.permission.POST_NOTIFICATIONS) },
             )
             Spacer(Modifier.height(6.dp))
         }
 
         WcLinkButton(
-            text = "系统通知设置",
+            text = Str.t("系统通知设置"),
             onClick = {
                 runCatching {
                     val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
