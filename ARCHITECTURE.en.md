@@ -82,6 +82,12 @@ Server through **bridges**, so the direction never reverses.
 - **Jobs**: the phone listens on no port, so the PC can only read or modify the phone by issuing
   jobs (`list` / `copy` / `delete` / `rename`) that the phone executes and reports back on.
 - **Directory copy** happens on the phone — never "download to the PC and upload again".
+- **List grouping**: the UI collapses tasks that share the first segment of their destination path into
+  one row (a folder download creates tasks one by one, so the server never assigns a batch id).
+  A single-file relative path has no `/`, so it is never merged by accident. The query limit is 1000
+  across all three layers, and **unfinished tasks sort first** — otherwise, once history grows,
+  queued entries fall out of the window and a batch shows only half of its files with a progress
+  figure that can never match.
 
 ---
 
@@ -181,6 +187,7 @@ grants and file-index snapshot (`DeviceFileEntries` by `root_id` prefix, `Device
 | D-037 | The advertised device name becomes `machine name · short ID` (first 4 chars of deviceId) | Two PCs with the same name are indistinguishable in the phone's list and share sheet, while deviceId is already unique and simply was not broadcast. Four characters change neither protocol nor pairing flow; old pairing records get the suffix client-side via `deviceLabel()` | Settled (2.10.0) |
 | D-038 | The phone's own roots are read **locally**, bypassing the PC's `/files/{root}/entries` | Browsing your own internal storage required the PC to be online: with the PC closed the UI said "Empty folder" and users thought files were gone. `FileProvider.list` already runs in the phone process, so one branch fixes it and saves a round trip. Browsing the phone from the PC still uses "index snapshot + list job" — the two paths do not interfere | Settled (2.10.1) |
 | D-039 | Unpairing **cascades** into the file-index snapshot, plus an orphan sweep at startup | An index is a snapshot: once the device is gone it is dead data. The old path deleted only grants, leaving 7400+ rows from two historical phones. Doing it inside `DeviceRepository.DeleteAsync` covers both delete entry points (`/app/api/devices/{id}` and the legacy WPF UI) automatically | Settled (2.10.1) |
+| D-040 | Group transfers by the **first segment of the destination path**, with no new batch field | A folder download creates tasks one by one and carries no batch id; adding `batchId` would mean a protocol change, a schema change and both ends upgrading in lockstep. The destination folder *is* the batch the user has in mind, and the first segment of `relativePath` is enough — a single file has no `/`, so it can never be merged by accident | Settled (2.10.2) |
 
 ---
 
