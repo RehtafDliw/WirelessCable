@@ -247,7 +247,12 @@ public sealed class MdnsAdvertiser : IDisposable
             : new ServiceProfile(instanceName, advertisement.ServiceType, (ushort)advertisement.Port);
 
         profile.AddProperty("id", advertisement.DeviceId);
-        profile.AddProperty("name", advertisement.DisplayName);
+        // TXT 的 character-string 只接受 ASCII（Makaretu 的 WriteString 会硬校验），
+        // 而设备名是「机器名 · 短ID」——那个间隔号 U+00B7 就不是 ASCII。
+        // 不编码的后果：广播时侥幸能过，`Unadvertise` 重新序列化就抛
+        // `Only ASCII characters are allowed`，反注册失败、手机端缓存残留到 TTL。
+        // 用 percent-encoding 传输，手机端 URL-decode 还原；不含 '%' 的旧值解码后仍是原样。
+        profile.AddProperty("name", Uri.EscapeDataString(advertisement.DisplayName));
         profile.AddProperty("proto", advertisement.ProtocolVersion.ToString());
         profile.AddProperty("fp", advertisement.Fingerprint);
         profile.AddProperty("suite", advertisement.PairingSuite);

@@ -60,7 +60,17 @@ public sealed class MdnsRecordTests
 
         var txt = Assert.Single(profile.Resources.OfType<TXTRecord>());
         Assert.Contains(txt.Strings, s => s == "id=abcdef0123456789abcdef0123456789");
-        Assert.Contains(txt.Strings, s => s == "name=客厅电脑");
+
+        // 设备名必须 percent-encode 后再进 TXT：TXT 的 character-string 只接受 ASCII，
+        // 而名字里有「·」(U+00B7)，中文机器名更是必然非 ASCII。不编码的话
+        // `Unadvertise` 和网络变化后的重新广播都会抛 Only ASCII characters are allowed。
+        var nameEntry = Assert.Single(txt.Strings, s => s.StartsWith("name=", StringComparison.Ordinal));
+        Assert.Equal("客厅电脑", Uri.UnescapeDataString(nameEntry["name=".Length..]));
+        Assert.DoesNotContain(nameEntry, ch => ch > 0x7F);
+
+        // 其它字段也不许出现非 ASCII，否则整个包都写不出去
+        Assert.All(txt.Strings, s => Assert.DoesNotContain(s, ch => ch > 0x7F));
+
         Assert.Contains(txt.Strings, s => s == "proto=1");
         Assert.Contains(txt.Strings, s => s.StartsWith("fp=", StringComparison.Ordinal) && s.Length == 3 + 64);
         Assert.Contains(txt.Strings, s => s == "role=pc");

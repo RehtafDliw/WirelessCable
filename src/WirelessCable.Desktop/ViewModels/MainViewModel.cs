@@ -837,13 +837,30 @@ public sealed class MainViewModel : ViewModelBase
     {
         if (_webUiWindow is { IsLoaded: true } existing)
         {
-            if (existing.WindowState == WindowState.Minimized)
+            try
             {
-                existing.WindowState = WindowState.Normal;
-            }
+                // 叉号只把窗口藏起来（`WebUiWindow.OnClosing` 里 `e.Cancel + Hide`），
+                // 这时 `IsLoaded` 仍是 true、`IsVisible` 是 false。
+                // 光 `Activate()` 对隐藏窗口没有任何效果——用户点了叉号再双击托盘会"叫不出来"，
+                // 旧窗口之所以能回来，是因为它走的是 `Show()`。
+                if (!existing.IsVisible)
+                {
+                    existing.Show();
+                }
 
-            existing.Activate();
-            return true;
+                if (existing.WindowState == WindowState.Minimized)
+                {
+                    existing.WindowState = WindowState.Normal;
+                }
+
+                existing.Activate();
+                return true;
+            }
+            catch (InvalidOperationException)
+            {
+                // 窗口已经进入关闭流程（`Closed` 回调还没跑到），当作不存在，往下重建
+                _webUiWindow = null;
+            }
         }
 
         var snapshot = _server.Snapshot();

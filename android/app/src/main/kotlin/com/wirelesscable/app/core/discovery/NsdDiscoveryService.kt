@@ -184,7 +184,8 @@ class NsdDiscoveryService(context: Context) {
 
                     val discovered = DiscoveredServer(
                         deviceId = deviceId,
-                        displayName = attributes["name"]?.toString(Charsets.UTF_8) ?: info.serviceName,
+                        displayName = DiscoveryTxt.displayName(attributes["name"]?.toString(Charsets.UTF_8))
+                            ?: info.serviceName,
                         host = host,
                         port = info.port,
                         fingerprint = attributes["fp"]?.toString(Charsets.UTF_8).orEmpty(),

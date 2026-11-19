@@ -60,4 +60,27 @@ class DiscoveryTxtTest {
         val input = listOf("172.17.13.108", "172.18.15.63")
         assertEquals(input.toSet(), LocalSubnet.preferLocal(input).toSet())
     }
+
+    @Test
+    fun displayNameIsPercentDecoded() {
+        // 电脑端把名字 percent-encode 才写进 TXT（TXT 只认 ASCII），这里要还原。
+        // 「·」是 U+00B7，UTF-8 为 %C2%B7
+        assertEquals("MY-PC · 3F7A", DiscoveryTxt.displayName("MY-PC%20%C2%B7%203F7A"))
+        assertEquals("客厅电脑 · 3F7A", DiscoveryTxt.displayName("%E5%AE%A2%E5%8E%85%E7%94%B5%E8%84%91%20%C2%B7%203F7A"))
+    }
+
+    @Test
+    fun plainDisplayNameStaysAsIs() {
+        // 旧版电脑端没编码，解码后必须还是原样；纯 ASCII 名不受影响
+        assertEquals("MY-PC", DiscoveryTxt.displayName("MY-PC"))
+        assertEquals("客厅电脑", DiscoveryTxt.displayName("客厅电脑"))
+        assertNull(DiscoveryTxt.displayName(null))
+        assertEquals("", DiscoveryTxt.displayName(""))
+    }
+
+    @Test
+    fun malformedPercentSequenceFallsBackToRaw() {
+        // 非法 % 序列不能让发现流程崩掉，原样返回
+        assertEquals("100%", DiscoveryTxt.displayName("100%"))
+    }
 }

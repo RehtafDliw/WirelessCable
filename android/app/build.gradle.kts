@@ -35,8 +35,8 @@ android {
         // 这行以前写的是"需求下限：Android 13"，和取值 30 不一致，排查权限时被误导过（1.5.58）。
         minSdk = 30
         targetSdk = 35
-        versionCode = 315
-        versionName = "2.10.2"
+        versionCode = 316
+        versionName = "2.10.3"
     }
 
     signingConfigs {
