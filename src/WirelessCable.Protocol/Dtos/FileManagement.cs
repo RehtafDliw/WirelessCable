@@ -53,6 +53,18 @@ public static class FileJobStatuses
     /// <summary>已下发，等待手机执行。</summary>
     public const string Pending = "pending";
 
+    /// <summary>
+    /// 用户按了暂停：留在队列里但不会被手机取走（恢复时改回 <see cref="Pending"/>）。
+    /// 整文件夹下载的真正"待办"在这里——传输任务要等手机执行才建出来。
+    /// </summary>
+    public const string Paused = "paused";
+
+    /// <summary>
+    /// 用户取消/删除这批传输时，队列里还没执行的作业一起作废。
+    /// 不删记录：留着能解释"为什么这个文件没传"，也不会被当成 pending 再取一次。
+    /// </summary>
+    public const string Cancelled = "cancelled";
+
     /// <summary>手机已开始执行。</summary>
     public const string Running = "running";
 
@@ -288,6 +300,21 @@ public sealed record FileJobDto
     /// </summary>
     public string? DestinationDirectoryId { get; set; }
 
+    /// <summary>
+    /// 本批共多少个文件（整文件夹传输时由电脑下发；0/null = 未知）。
+    /// 手机端逐条执行作业，天生不知道总数，靠它显示整批进度。
+    /// </summary>
+    public int? BatchTotal { get; set; }
+
+    /// <summary>本批对应的文件夹名（手机端收成一行时显示）。</summary>
+    public string? BatchName { get; set; }
+
+    /// <summary>
+    /// 本批所有文件的总字节数（电脑知道，手机逐条执行时不知道）。
+    /// 进度条必须用它做分母：用"已见任务的总大小"会随着任务创建而变大，进度会往回跳。
+    /// </summary>
+    public long? BatchTotalBytes { get; set; }
+
     /// <summary><see cref="FileJobStatuses"/> 之一。</summary>
     public string Status { get; set; } = FileJobStatuses.Pending;
 
@@ -317,6 +344,28 @@ public sealed class FileJobRequestDto
 
     /// <summary>新建目录或重命名时使用的名字。</summary>
     public string? DisplayName { get; set; }
+
+    /// <summary>
+    /// 本批共多少个文件（整文件夹拉取时由电脑填）。
+    /// 电脑知道总数，手机不知道；随作业带下去，手机端才能显示 17/330 而不是 17/17。
+    /// </summary>
+    public int? BatchTotal { get; set; }
+
+    /// <summary>本批对应的文件夹名（显示用）。</summary>
+    public string? BatchName { get; set; }
+
+    /// <summary>本批所有文件的总字节数（进度条的分母）。</summary>
+    public long? BatchTotalBytes { get; set; }
+}
+
+/// <summary>手机端整批暂停/恢复作业队列。</summary>
+public sealed class FileJobControlDto
+{
+    /// <summary>落点相对目录；空 = 该设备全部待执行作业。</summary>
+    public string? DestinationPath { get; set; }
+
+    /// <summary>`pause` / `resume`。</summary>
+    public string Action { get; set; } = string.Empty;
 }
 
 /// <summary>手机回报作业执行结果。</summary>

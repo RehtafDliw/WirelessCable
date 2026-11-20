@@ -30,6 +30,15 @@ public sealed class TransferOptions
     public TimeSpan InterruptedRetention { get; init; } =
         TimeSpan.FromSeconds(ProtocolConstants.InterruptedTaskRetentionSeconds);
 
+    /// <summary>
+    /// 已取消的记录保留多久；超过后回收（行与分块）。
+    ///
+    /// 取消是双向的：两端列表都不显示它，手机端也会删掉本地记录。
+    /// 留一小段时间是为了让**离线的那一端**回来时还能看到"这条被取消了"，
+    /// 时间一到就回收，避免这些行一直堆着（真机：341 条 cancelled）。
+    /// </summary>
+    public TimeSpan CancelledRetention { get; init; } = TimeSpan.FromMinutes(30);
+
     /// <summary>回收扫描间隔。</summary>
     public TimeSpan JanitorInterval { get; init; } = TimeSpan.FromSeconds(30);
 

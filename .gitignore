@@ -81,10 +81,21 @@ tmp/
 .workbuddy/
 
 # ---------------------------------------------------------------- IDE / 系统
-.vs/
+# JetBrains Rider / IntelliJ：.idea 里有本机绝对路径、最近打开的文件、
+# 运行配置与数据库连接，一旦入库就是"把电脑目录结构和个人路径"送出去了。
 .idea/
-.vscode/
+*.iml
+# 个人偏好（窗口布局、断点、运行配置）；不带 .user 的 *.DotSettings 是
+# 团队共享的代码风格，要入库，别整类忽略
 *.user
+*.DotSettings.user
 *.suo
+.vs/
+.vscode/
+# Rider / ReSharper 本地缓存
+_ReSharper*/
+*.ReSharper
+# 系统垃圾
 Thumbs.db
 .DS_Store
+desktop.ini

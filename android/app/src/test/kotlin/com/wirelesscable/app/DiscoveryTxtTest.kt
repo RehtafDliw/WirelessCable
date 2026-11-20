@@ -9,30 +9,30 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * TXT 地址候选解析。真机上电脑有两张网卡（172.18.15.63 / 172.17.13.108），
+ * TXT 地址候选解析。真机上电脑有两张网卡（192.0.2.63 / 198.51.100.108），
  * A 记录只会给一条，客户端必须能从 TXT 里拿到完整列表。
  */
 class DiscoveryTxtTest {
 
     @Test
     fun hostComesFirstThenTxtCandidates() {
-        val result = DiscoveryTxt.candidates("172.17.13.108", "172.17.13.108,172.18.15.63")
+        val result = DiscoveryTxt.candidates("198.51.100.108", "198.51.100.108,192.0.2.63")
 
-        assertEquals(listOf("172.17.13.108", "172.18.15.63"), result)
+        assertEquals(listOf("198.51.100.108", "192.0.2.63"), result)
     }
 
     @Test
     fun invalidEntriesAreDropped() {
-        val result = DiscoveryTxt.candidates("172.18.15.63", " ,not-an-ip,999.1.1.1,172.17.13.108")
+        val result = DiscoveryTxt.candidates("192.0.2.63", " ,not-an-ip,999.1.1.1,198.51.100.108")
 
-        assertEquals(listOf("172.18.15.63", "172.17.13.108"), result)
+        assertEquals(listOf("192.0.2.63", "198.51.100.108"), result)
     }
 
     @Test
     fun duplicatesAreRemoved() {
-        val result = DiscoveryTxt.candidates("172.18.15.63", "172.18.15.63,172.18.15.63")
+        val result = DiscoveryTxt.candidates("192.0.2.63", "192.0.2.63,192.0.2.63")
 
-        assertEquals(listOf("172.18.15.63"), result)
+        assertEquals(listOf("192.0.2.63"), result)
     }
 
     @Test
@@ -52,12 +52,12 @@ class DiscoveryTxtTest {
     @Test
     fun subnetOrderingPutsSameSubnetFirst() {
         // 只验证纯函数部分：地址转整数（32 位有符号，故用 toInt() 对齐）
-        assertEquals(0xAC120F3F.toInt(), LocalSubnet.toInt("172.18.15.63"))
+        assertEquals(0xAC120F3F.toInt(), LocalSubnet.toInt("192.0.2.63"))
         assertNull(LocalSubnet.toInt("172.18.15"))
         assertNull(LocalSubnet.toInt("172.18.15.999"))
 
         // preferLocal 在本机只能验证"不丢地址"
-        val input = listOf("172.17.13.108", "172.18.15.63")
+        val input = listOf("198.51.100.108", "192.0.2.63")
         assertEquals(input.toSet(), LocalSubnet.preferLocal(input).toSet())
     }
 

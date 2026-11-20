@@ -10,6 +10,7 @@ using WirelessCable.Server.Http;
 using WirelessCable.Server.Middleware;
 using WirelessCable.Server.Transfer;
 using WirelessCable.Storage.Entities;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace WirelessCable.Server.Endpoints;
 
@@ -49,6 +50,9 @@ public static class FileEndpoints
         app.MapPost(ProtocolConstants.FileDeviceIndexSyncPath, SyncIndexesAsync);
         app.MapGet(ProtocolConstants.FileDeviceJobsPath, TakeJobsAsync);
         app.MapPost(ProtocolConstants.FileDeviceJobsPath + "/{jobId}/result", CompleteJobAsync);
+        app.MapPost(ProtocolConstants.FileDeviceJobsPath + "/{jobId}/lease", RenewLeaseAsync);
+        app.MapPost(ProtocolConstants.FileDeviceJobsPath + "/{jobId}/task", AttachTaskAsync);
+        app.MapPost(ProtocolConstants.FileDeviceJobsControlPath, ControlJobsAsync);
     }
 
     private static async Task ListRootsAsync(
@@ -278,7 +282,10 @@ public static class FileEndpoints
             request.SourcePath,
             request.DestinationPath,
             request.DisplayName,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            request.BatchTotal,
+            request.BatchName,
+            request.BatchTotalBytes).ConfigureAwait(false);
 
         if (!result.Success)
         {
@@ -287,6 +294,70 @@ public static class FileEndpoints
         }
 
         await ApiResponseWriter.WriteSuccessAsync(context, result.Value!, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>整批暂停/恢复队列里的作业（手机端按落点目录调）。</summary>
+    private static async Task ControlJobsAsync(
+        HttpContext context,
+        FileService service,
+        CancellationToken cancellationToken)
+    {
+        var device = await RequireDeviceAsync(context).ConfigureAwait(false);
+        if (device is null)
+        {
+            return;
+        }
+
+        var request = await ReadJsonAsync<FileJobControlDto>(context, cancellationToken).ConfigureAwait(false);
+        if (request is null)
+        {
+            await WriteErrorAsync(context, ErrorCodes.InvalidRequest, "请求体不是合法的 JSON。", 400)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        var action = (request.Action ?? string.Empty).Trim().ToLowerInvariant();
+        if (action is not ("pause" or "resume" or "cancel"))
+        {
+            await WriteErrorAsync(context, ErrorCodes.InvalidRequest, "不认识的动作。", 400)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        var engine = context.RequestServices.GetRequiredService<TransferEngine>();
+
+        var changed = 0;
+        if (action == "cancel")
+        {
+            // 队列里可能同时有 pending / paused / running：running 的是手机已经领走、
+            // 正在执行的那几个。不停它们的话，"取消"之后手机上还在传（真机现象）。
+            //
+            // **关联的传输任务也要一起取消**：只停作业的话，另一端的列表里
+            // 那条任务还挂着、状态也没变（真机：手机端取消后，电脑端还显示一条"已取消"）。
+            changed = await engine
+                .StopJobsAndTasksAsync(device, request.DestinationPath, cancel: true, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        else if (action == "pause")
+        {
+            // 暂停同理：作业停了，任务也要停（需求 1：任一方暂停，另一方也停）
+            changed = await engine
+                .StopJobsAndTasksAsync(device, request.DestinationPath, cancel: false, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        else
+        {
+            changed = await service
+                .SetDeviceJobsStatusManyAsync(
+                    device.DeviceId, request.DestinationPath,
+                    [FileJobStatuses.Paused],
+                    FileJobStatuses.Pending, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        await ApiResponseWriter
+            .WriteSuccessAsync(context, new { changed, action }, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private static async Task ListJobsAsync(
@@ -383,6 +454,62 @@ public static class FileEndpoints
             .TakePendingJobsAsync(device, cancellationToken, TimeSpan.FromMilliseconds(waitMs))
             .ConfigureAwait(false);
         await ApiResponseWriter.WriteSuccessAsync(context, jobs, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// 续租 + 取控制指令。
+    ///
+    /// 手机执行作业期间每 8 秒调一次。状态是 running 就继续；变成 paused/cancelled
+    /// 就立刻停手（不回报结果，状态由服务端定）。作业不存在返回 gone。
+    /// </summary>
+    private static async Task RenewLeaseAsync(
+        HttpContext context,
+        FileService service,
+        string jobId,
+        CancellationToken cancellationToken)
+    {
+        var device = await RequireDeviceAsync(context).ConfigureAwait(false);
+        if (device is null)
+        {
+            return;
+        }
+
+        var status = await service
+            .RenewJobLeaseAsync(device, jobId, cancellationToken)
+            .ConfigureAwait(false);
+
+        // 用 200 带状态：手机侧只关心"还该不该继续"，不该把暂停当成网络错误去重试
+        await ApiResponseWriter
+            .WriteSuccessAsync(context, new { status = status ?? "gone" }, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>手机把建出来的传输任务挂到作业上（暂停后继续靠它认出上次那个任务）。</summary>
+    private static async Task AttachTaskAsync(
+        HttpContext context,
+        FileService service,
+        string jobId,
+        CancellationToken cancellationToken)
+    {
+        var device = await RequireDeviceAsync(context).ConfigureAwait(false);
+        if (device is null)
+        {
+            return;
+        }
+
+        var request = await ReadJsonAsync<JobTaskRequest>(context, cancellationToken).ConfigureAwait(false);
+        if (request is null || string.IsNullOrWhiteSpace(request.TaskId))
+        {
+            await WriteErrorAsync(context, ErrorCodes.InvalidRequest, "缺少 taskId。", 400).ConfigureAwait(false);
+            return;
+        }
+
+        await service
+            .AttachJobTransferTaskAsync(device, jobId, request.TaskId, cancellationToken)
+            .ConfigureAwait(false);
+
+        await ApiResponseWriter.WriteSuccessAsync(context, new { ok = true }, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private static async Task CompleteJobAsync(
@@ -701,4 +828,11 @@ public static class FileEndpoints
         bool retryable = false,
         string? details = null)
         => ApiResponseWriter.WriteErrorAsync(context, statusCode, code, message, retryable, details);
+}
+
+/// <summary>手机把建出来的传输任务挂到作业上。</summary>
+public sealed class JobTaskRequest
+{
+    /// <summary><c>/transfer/uploads</c> 返回的 taskId。</summary>
+    public string? TaskId { get; set; }
 }

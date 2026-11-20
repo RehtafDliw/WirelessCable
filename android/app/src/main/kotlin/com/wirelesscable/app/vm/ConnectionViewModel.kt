@@ -12,6 +12,7 @@ import com.wirelesscable.app.core.network.WcApiClient
 import com.wirelesscable.app.core.protocol.ErrorCodes
 import com.wirelesscable.app.core.protocol.HealthInfo
 import com.wirelesscable.app.core.protocol.ProtocolConstants
+import com.wirelesscable.app.core.sync.SessionSyncEngine
 import com.wirelesscable.app.data.db.DeviceEntity
 import com.wirelesscable.app.data.repository.ConnectionRepository
 import com.wirelesscable.app.data.security.TokenVault
@@ -92,15 +93,41 @@ class ConnectionViewModel(
         viewModelScope.launch {
             val api = WcApiClient.create(endpoint, setOf(pin))
 
-            // 设备信息需要设备令牌（K5）：只有这台电脑正是上次配对的那台时才拿得到
+            // 凭据按**证书指纹**认，不按地址。
+            //
+            // 换网络（连手机热点、换 Wi-Fi、DHCP 换租约）后电脑 IP 必然会变，
+            // 但电脑还是那台电脑。原来要求 host/port 完全一致才加载令牌，
+            // 结果是"用户明明配过对，手动改个地址却被判成未配对，要求重新扫码"——
+            // 移动办公场景必踩。指纹是这台电脑的身份，它没变就该继续用旧凭据。
             val saved = repository.loadSession()
             val token = saved
-                ?.takeIf { it.host == endpoint.host && it.port == endpoint.port }
+                ?.takeIf { Fingerprint.normalize(it.fingerprint) == pin }
                 ?.let { vault.load(it.deviceId) }
 
             val healthOutcome = api.health(token)
             if (healthOutcome is ApiOutcome.Failure) {
-                fail(healthOutcome.code, healthOutcome.message)
+                // 这次连不上，但**配对的那台电脑可能还在正常连着**。
+                // 不回滚的话，界面会停在"连接超时"，而实际传输/心跳都好好的——
+                // 用户会以为断了，去重新配对，反而把好好的会话拆了。
+                // 只在"当前确实连着、且这次试的是另一个地址"时回滚。
+                val session = repository.loadSession()
+                if (session != null &&
+                    SessionSyncEngine.state.value.connected &&
+                    (session.host != endpoint.host || session.port != endpoint.port)
+                ) {
+                    _state.update {
+                        it.copy(
+                            phase = ConnectionPhase.Failed,
+                            errorCode = healthOutcome.code,
+                            errorMessage = "这个地址连不上，仍在用 ${session.host} 连接",
+                            host = session.host,
+                            port = session.port.toString(),
+                        )
+                    }
+                } else {
+                    fail(healthOutcome.code, healthOutcome.message)
+                }
+
                 return@launch
             }
             val health = (healthOutcome as ApiOutcome.Success).value
@@ -138,6 +165,15 @@ class ConnectionViewModel(
             client = api
             currentToken = token
             val now = System.currentTimeMillis()
+
+            // 地址和会话里记的不一样（换了网络）：把会话迁到新地址。
+            // 不迁的话界面显示"已连接"，可后台心跳还打在旧 IP 上——传输、作业全不动，
+            // 用户会以为"连上了但传不了"。
+            if (saved != null && (saved.host != endpoint.host || saved.port != endpoint.port)) {
+                repository.saveSession(device.deviceId, endpoint.host, endpoint.port, pin)
+                // 清掉"自动重连已用完"的闸门，让后台立刻按新地址试一次
+                SessionSyncEngine.retryNow()
+            }
 
             _state.update {
                 it.copy(

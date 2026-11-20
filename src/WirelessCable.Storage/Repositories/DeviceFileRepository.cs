@@ -379,9 +379,10 @@ public sealed class DeviceFileRepository
             INSERT INTO FileOperationJobs (job_id, device_id, root_id, operation, source_path,
                                           destination_path, display_name, transfer_task_id,
                                           status, error_code,
-                                          error_message, created_at_utc, updated_at_utc, result_payload)
+                                          error_message, created_at_utc, updated_at_utc, result_payload,
+                                          batch_total, batch_name, batch_total_bytes)
             VALUES ($id, $device, $root, $op, $src, $dst, $name, $taskId, $status, $errCode,
-                    $err, $created, $updated, $payload);
+                    $err, $created, $updated, $payload, $batchTotal, $batchName, $batchBytes);
             """;
         command.Parameters.AddWithValue("$id", job.JobId);
         command.Parameters.AddWithValue("$device", job.DeviceId);
@@ -397,11 +398,129 @@ public sealed class DeviceFileRepository
         command.Parameters.AddWithValue("$created", job.CreatedAtUtc.ToString("O"));
         command.Parameters.AddWithValue("$updated", job.UpdatedAtUtc.ToString("O"));
         command.Parameters.AddWithValue("$payload", (object?)job.ResultPayload ?? DBNull.Value);
+        command.Parameters.AddWithValue("$batchTotal", (object?)job.BatchTotal ?? DBNull.Value);
+        command.Parameters.AddWithValue("$batchName", (object?)job.BatchName ?? DBNull.Value);
+        command.Parameters.AddWithValue("$batchBytes", (object?)job.BatchTotalBytes ?? DBNull.Value);
 
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>取该设备待执行的作业（pending 状态），按创建顺序。</summary>
+    /// <summary>
+    /// 把某设备某目录下的一批作业整体换状态（pending ↔ paused）。
+    ///
+    /// 整文件夹下载时，真正"还没做"的部分留在作业队列里——传输任务要等手机执行才建出来。
+    /// 只暂停已经建出来的任务，队列里的会继续被取走，用户按了暂停文件还在流。
+    /// </summary>
+    /// <param name="destinationPath">落点相对目录；空 = 该设备全部作业。
+    /// 按前缀匹配，因为一个文件夹分组覆盖它的所有子目录。</param>
+    public Task<int> SetJobsStatusAsync(
+        string? deviceId,
+        string? destinationPath,
+        string fromStatus,
+        string toStatus,
+        CancellationToken cancellationToken = default)
+        => SetJobsStatusManyAsync(deviceId, destinationPath, [fromStatus], toStatus, cancellationToken);
+
+    /// <summary>
+    /// 按状态批量改作业（可一次匹配多个原状态）。
+    ///
+    /// 暂停/取消必须能打到 **running**：手机把作业领走之后就在本地执行，
+    /// 只改 pending 等于没停（"暂停刹不住车"的根）。改完同时清掉租约。
+    /// </summary>
+    public async Task<int> SetJobsStatusManyAsync(
+        string? deviceId,
+        string? destinationPath,
+        IReadOnlyList<string> fromStatuses,
+        string toStatus,
+        CancellationToken cancellationToken = default)
+    {
+        if (fromStatuses.Count == 0)
+        {
+            return 0;
+        }
+
+        await using var connection = _factory.Open();
+        await using var command = connection.CreateCommand();
+
+        // 传输记录被删光时就取不到 deviceId 了，但队列里还压着几十上百个作业。
+        // 这时按目录匹配所有设备——本机同时连两台手机、且落点目录同名的概率极低，
+        // 比"点了暂停什么都不动"好。
+        var hasDevice = !string.IsNullOrWhiteSpace(deviceId);
+        var hasPath = !string.IsNullOrWhiteSpace(destinationPath);
+        var deviceFilter = hasDevice ? "AND device_id = $device" : string.Empty;
+        var pathFilter = hasPath
+            ? "AND (destination_path = $dir OR destination_path LIKE $dir || '/%')"
+            : string.Empty;
+
+        var placeholders = new List<string>(fromStatuses.Count);
+        for (var i = 0; i < fromStatuses.Count; i++)
+        {
+            placeholders.Add($"$from{i}");
+        }
+
+        command.CommandText = $"""
+            UPDATE FileOperationJobs
+            SET status = $to, updated_at_utc = $now, lease_until_utc = NULL
+            WHERE status IN ({string.Join(", ", placeholders)}) {deviceFilter} {pathFilter};
+            """;
+
+        if (hasDevice)
+        {
+            command.Parameters.AddWithValue("$device", deviceId!);
+        }
+
+        for (var i = 0; i < fromStatuses.Count; i++)
+        {
+            command.Parameters.AddWithValue($"$from{i}", fromStatuses[i]);
+        }
+
+        command.Parameters.AddWithValue("$to", toStatus);
+        command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
+        if (hasPath)
+        {
+            command.Parameters.AddWithValue("$dir", destinationPath!.TrimEnd('/'));
+        }
+
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// 每个落点目录下**还没结束**的作业数（pending / paused / running）。
+    ///
+    /// 桌面端拿它判断"这一批还在不在传输中"：整文件夹是逐个作业下发的，
+    /// 暂停时队列里压着的文件还没有对应的传输任务，只看任务列表会以为批已经结束——
+    /// 界面几秒后把这一行扔进「已完成」，用户却在手机上看到任务还挂着。
+    /// </summary>
+    public async Task<IReadOnlyDictionary<string, (int Open, int Paused)>> CountOpenJobsByDirectoryAsync(
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = _factory.Open();
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT destination_path,
+                   COUNT(*),
+                   SUM(CASE WHEN status = 'paused' THEN 1 ELSE 0 END)
+            FROM FileOperationJobs
+            WHERE status IN ('pending', 'paused', 'running')
+              AND destination_path IS NOT NULL AND destination_path <> ''
+            GROUP BY destination_path;
+            """;
+
+        var map = new Dictionary<string, (int Open, int Paused)>(StringComparer.Ordinal);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            // SQLite 的 COUNT/SUM 都是 64 位，GetInt32 会抛 InvalidCast
+            var open = (int)reader.GetInt64(1);
+            var paused = reader.IsDBNull(2) ? 0 : (int)reader.GetInt64(2);
+            map[reader.GetString(0)] = (open, paused);
+        }
+
+        return map;
+    }
+
     public async Task<IReadOnlyList<FileOperationJobRecord>> ListPendingJobsAsync(
         string deviceId,
         CancellationToken cancellationToken = default)
@@ -412,7 +531,7 @@ public sealed class DeviceFileRepository
             """
             SELECT job_id, device_id, root_id, operation, source_path, destination_path,
                    display_name, transfer_task_id, status, error_code, error_message,
-                   created_at_utc, updated_at_utc, result_payload
+                   created_at_utc, updated_at_utc, result_payload, batch_total, batch_name, batch_total_bytes
             FROM FileOperationJobs WHERE device_id = $device AND status = 'pending' ORDER BY created_at_utc;
             """;
         command.Parameters.AddWithValue("$device", deviceId);
@@ -462,7 +581,7 @@ public sealed class DeviceFileRepository
                 """
                 SELECT job_id, device_id, root_id, operation, source_path, destination_path,
                        display_name, transfer_task_id, status, error_code, error_message,
-                       created_at_utc, updated_at_utc, result_payload
+                       created_at_utc, updated_at_utc, result_payload, batch_total, batch_name, batch_total_bytes
                 FROM FileOperationJobs
                 WHERE device_id = $device
                   AND status = 'running'
@@ -518,7 +637,7 @@ public sealed class DeviceFileRepository
             """
             SELECT job_id, device_id, root_id, operation, source_path, destination_path,
                    display_name, transfer_task_id, status, error_code, error_message,
-                   created_at_utc, updated_at_utc, result_payload
+                   created_at_utc, updated_at_utc, result_payload, batch_total, batch_name, batch_total_bytes
             FROM FileOperationJobs WHERE job_id = $id;
             """;
         command.Parameters.AddWithValue("$id", jobId);
@@ -533,15 +652,19 @@ public sealed class DeviceFileRepository
         string? errorCode,
         string? errorMessage,
         CancellationToken cancellationToken = default,
-        string? resultPayload = null)
+        string? resultPayload = null,
+        DateTimeOffset? leaseUntilUtc = null)
     {
         await using var connection = _factory.Open();
         await using var command = connection.CreateCommand();
+        // 租约只在 running 时有意义：写终态/暂停时顺手清掉，
+        // 否则一条 completed 的作业还挂着租约，回收逻辑会看着很怪
         command.CommandText =
             """
             UPDATE FileOperationJobs
             SET status = $status, error_code = $errCode, error_message = $err, updated_at_utc = $updated,
-                result_payload = COALESCE($payload, result_payload)
+                result_payload = COALESCE($payload, result_payload),
+                lease_until_utc = CASE WHEN $status = 'running' THEN $lease ELSE NULL END
             WHERE job_id = $id;
             """;
         command.Parameters.AddWithValue("$id", jobId);
@@ -550,8 +673,206 @@ public sealed class DeviceFileRepository
         command.Parameters.AddWithValue("$err", (object?)errorMessage ?? DBNull.Value);
         command.Parameters.AddWithValue("$updated", DateTimeOffset.UtcNow.ToString("O"));
         command.Parameters.AddWithValue("$payload", (object?)resultPayload ?? DBNull.Value);
+        command.Parameters.AddWithValue(
+            "$lease",
+            leaseUntilUtc is null ? DBNull.Value : leaseUntilUtc.Value.ToUniversalTime().ToString("O"));
 
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// 续租并带回服务端的最新状态。
+    ///
+    /// 手机执行作业期间每几秒调一次：状态还是 running 就继续干；
+    /// 变成 paused/cancelled 就立刻停手（**不回报结果**，状态由服务端定）。
+    /// 这是"一次领多个作业"不失控的关键——没有它，已被取走的作业只能等它传完。
+    /// </summary>
+    public async Task<string?> RenewJobLeaseAsync(
+        string jobId,
+        string deviceId,
+        DateTimeOffset leaseUntilUtc,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = _factory.Open();
+
+        string? status;
+        await using (var read = connection.CreateCommand())
+        {
+            read.CommandText =
+                "SELECT status FROM FileOperationJobs WHERE job_id = $id AND device_id = $device;";
+            read.Parameters.AddWithValue("$id", jobId);
+            read.Parameters.AddWithValue("$device", deviceId);
+            status = await read.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
+        }
+
+        if (status is null)
+        {
+            return null;
+        }
+
+        if (!string.Equals(status, "running", StringComparison.Ordinal))
+        {
+            return status;
+        }
+
+        await using var renew = connection.CreateCommand();
+        renew.CommandText =
+            """
+            UPDATE FileOperationJobs
+            SET lease_until_utc = $lease, updated_at_utc = $now
+            WHERE job_id = $id AND device_id = $device AND status = 'running';
+            """;
+        renew.Parameters.AddWithValue("$id", jobId);
+        renew.Parameters.AddWithValue("$device", deviceId);
+        renew.Parameters.AddWithValue("$lease", leaseUntilUtc.ToUniversalTime().ToString("O"));
+        renew.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
+
+        var changed = await renew.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        // 续约时被别的请求改成了别的状态：以库里为准
+        return changed > 0 ? "running" : status;
+    }
+
+    /// <summary>
+    /// 把手机建出来的传输任务挂到作业上。
+    ///
+    /// 电脑拉手机时，传输任务是手机自己在 `uploadStart` 里建的，服务端本来不知道。
+    /// 暂停后继续，作业会被重新取走；没有这条关联就只能再建一个同名任务
+    /// （列表里两条、文件传两遍）。有了它，手机能认出"上次传到一半的那个"。
+    /// </summary>
+    public async Task AttachJobTransferTaskAsync(
+        string jobId,
+        string deviceId,
+        string transferTaskId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = _factory.Open();
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            UPDATE FileOperationJobs SET transfer_task_id = $task, updated_at_utc = $now
+            WHERE job_id = $id AND device_id = $device;
+            """;
+        command.Parameters.AddWithValue("$id", jobId);
+        command.Parameters.AddWithValue("$device", deviceId);
+        command.Parameters.AddWithValue("$task", transferTaskId);
+        command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
+
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// 按**传输任务**改它关联的作业状态。
+    ///
+    /// 传输任务与作业是同一件事的两层：作业是"电脑下发给手机的待办"，
+    /// 传输任务是"正在传的数据"。电脑点暂停/取消时只动其中一层，
+    /// 另一层不动就会各说各话——作业还在 running，手机续租照旧、照着推块，
+    /// "暂停同步"就成了空话（真机：电脑暂停作业，手机还在传）。
+    /// </summary>
+    public async Task<int> SetJobsStatusForTransferTaskAsync(
+        IReadOnlyList<string> transferTaskIds,
+        IReadOnlyList<string> fromStatuses,
+        string toStatus,
+        CancellationToken cancellationToken = default)
+    {
+        if (transferTaskIds.Count == 0 || fromStatuses.Count == 0)
+        {
+            return 0;
+        }
+
+        await using var connection = _factory.Open();
+        await using var command = connection.CreateCommand();
+
+        var taskPlaceholders = new List<string>(transferTaskIds.Count);
+        for (var i = 0; i < transferTaskIds.Count; i++)
+        {
+            taskPlaceholders.Add($"$task{i}");
+        }
+
+        var statusPlaceholders = new List<string>(fromStatuses.Count);
+        for (var i = 0; i < fromStatuses.Count; i++)
+        {
+            statusPlaceholders.Add($"$from{i}");
+        }
+
+        // 按 transfer_task_id 精确反查：**不能按目录作废**，否则取消一个文件
+        // 会把同一落点目录下的另一批也作废掉（手机端 batch 不带目录参数）。
+        command.CommandText = $"""
+            UPDATE FileOperationJobs
+            SET status = $to, updated_at_utc = $now, lease_until_utc = NULL
+            WHERE transfer_task_id IN ({string.Join(", ", taskPlaceholders)})
+              AND status IN ({string.Join(", ", statusPlaceholders)});
+            """;
+
+        command.Parameters.AddWithValue("$to", toStatus);
+        command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
+        for (var i = 0; i < transferTaskIds.Count; i++)
+        {
+            command.Parameters.AddWithValue($"$task{i}", transferTaskIds[i]);
+        }
+
+        for (var i = 0; i < fromStatuses.Count; i++)
+        {
+            command.Parameters.AddWithValue($"$from{i}", fromStatuses[i]);
+        }
+
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// 列出某设备"还没结束的作业"所关联的传输任务。
+    ///
+    /// 作业是"电脑下发给手机的待办"，传输任务是"正在传的数据"。
+    /// 停作业的时候要把这些任务一起停，否则"暂停/取消"只作用在一半上
+    /// （真机：手机端取消后，另一边还挂着一条"已取消"、也还在传）。
+    /// </summary>
+    public async Task<IReadOnlyList<string>> ListActiveJobTransferTaskIdsAsync(
+        string deviceId,
+        string? destinationPath,
+        IReadOnlyList<string> fromStatuses,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(deviceId) || fromStatuses.Count == 0)
+        {
+            return Array.Empty<string>();
+        }
+
+        await using var connection = _factory.Open();
+        await using var command = connection.CreateCommand();
+
+        var placeholders = new List<string>(fromStatuses.Count);
+        for (var i = 0; i < fromStatuses.Count; i++)
+        {
+            placeholders.Add($"$from{i}");
+        }
+
+        var hasPath = !string.IsNullOrWhiteSpace(destinationPath);
+        command.CommandText = $"""
+            SELECT transfer_task_id FROM FileOperationJobs
+            WHERE device_id = $device
+              AND status IN ({string.Join(", ", placeholders)})
+              AND transfer_task_id IS NOT NULL AND transfer_task_id <> ''
+              {(hasPath ? "AND (destination_path = $dir OR destination_path LIKE $dir || '/%')" : string.Empty)};
+            """;
+
+        command.Parameters.AddWithValue("$device", deviceId);
+        for (var i = 0; i < fromStatuses.Count; i++)
+        {
+            command.Parameters.AddWithValue($"$from{i}", fromStatuses[i]);
+        }
+
+        if (hasPath)
+        {
+            command.Parameters.AddWithValue("$dir", destinationPath!);
+        }
+
+        var result = new List<string>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            result.Add(reader.GetString(0));
+        }
+
+        return result;
     }
 
     /// <summary>列出某设备的近期作业，供电脑端展示操作历史。</summary>
@@ -566,7 +887,7 @@ public sealed class DeviceFileRepository
             """
             SELECT job_id, device_id, root_id, operation, source_path, destination_path,
                    display_name, transfer_task_id, status, error_code, error_message,
-                   created_at_utc, updated_at_utc, result_payload
+                   created_at_utc, updated_at_utc, result_payload, batch_total, batch_name, batch_total_bytes
             FROM FileOperationJobs WHERE device_id = $device ORDER BY created_at_utc DESC LIMIT $limit;
             """;
         command.Parameters.AddWithValue("$device", deviceId);
@@ -625,6 +946,9 @@ public sealed class DeviceFileRepository
         CreatedAtUtc = SharedDirectoryRepository.ParseTime(reader.GetString(11)),
         UpdatedAtUtc = SharedDirectoryRepository.ParseTime(reader.GetString(12)),
         ResultPayload = reader.IsDBNull(13) ? null : reader.GetString(13),
+        BatchTotal = reader.IsDBNull(14) ? null : reader.GetInt32(14),
+        BatchName = reader.IsDBNull(15) ? null : reader.GetString(15),
+        BatchTotalBytes = reader.IsDBNull(16) ? null : reader.GetInt64(16),
     };
 
     /// <summary>把相对路径规范化成 "a/b" 形式；空串表示根。</summary>

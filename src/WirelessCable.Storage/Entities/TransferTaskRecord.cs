@@ -81,4 +81,13 @@ public sealed class TransferTaskRecord
 
     /// <summary>批次对应的文件夹名（显示用）。</summary>
     public string? BatchName { get; init; }
+
+    /// <summary>
+    /// 这条记录对**哪台手机**隐藏（deviceId）；null 表示手机端还看得见。
+    /// 两端各删各的，桌面端的标记是 <see cref="DesktopHidden"/>，互不影响。
+    /// </summary>
+    public string? HiddenForDevice { get; init; }
+
+    /// <summary>桌面端删过这条记录（1 = 桌面列表不再显示）。不影响任何一台手机的视图。</summary>
+    public int DesktopHidden { get; init; }
 }

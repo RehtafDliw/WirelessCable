@@ -110,6 +110,18 @@ class NsdDiscoveryService(context: Context) {
         }
     }
 
+    /**
+     * 清空已发现列表，重新开始。
+     *
+     * 重连场景必须清：上一次的结果可能带着**已经失效的 IP**（电脑换了网络），
+     * 不清的话 `servers` 会立刻返回旧值，看起来"重新发现了"，实际仍是错地址。
+     */
+    fun reset() {
+        byDeviceId.clear()
+        resolving.clear()
+        _servers.value = emptyList()
+    }
+
     /** 释放系统资源；Activity 销毁时调用。 */
     fun close() {
         stop()
@@ -175,7 +187,13 @@ class NsdDiscoveryService(context: Context) {
 
                     // 注意：部分 ROM 的 mdnsd 会截断 TXT，键多时最后几个会丢（实测 addrs 丢失），
                     // 因此地址不能依赖 TXT 传递，只能靠 A 记录。
-                    Log.d(TAG, "解析 ${info.serviceName} host=$host keys=${attributes.size}")
+                    // 但 TXT 完整时 addrs 能救"电脑多网卡"的场景（A 记录只有主地址），
+                    // 所以原始值也打出来——排查"扫到了却连不上"时就靠它。
+                    Log.d(
+                        TAG,
+                        "解析 ${info.serviceName} host=$host keys=${attributes.size} " +
+                            "addrs=${attributes["addrs"]?.toString(Charsets.UTF_8)}",
+                    )
 
                     if (deviceId.isNullOrBlank() || host.isNullOrBlank()) {
                         Log.w(TAG, "解析结果缺少 id 或地址，忽略 ${info.serviceName}")

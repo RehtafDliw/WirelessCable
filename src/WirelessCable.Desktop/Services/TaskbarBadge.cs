@@ -9,9 +9,14 @@ using WirelessCable.Desktop.ViewModels;
 namespace WirelessCable.Desktop.Services;
 
 /// <summary>
-/// 任务栏角标：有任务在传的时候，在任务栏按钮右下角贴一张图形角标，传完就撤。
+/// 任务栏角标：有任务在传的时候，在任务栏按钮右下角贴一个小徽章，传完就撤。
 ///
-/// 图与托盘图标共用 <c>assets/WirelessCable.Badge.ico</c>（只有图形、透明底）。
+/// 徽章必须和主图标**长得不一样**。以前这里加载的是
+/// <c>assets/WirelessCable.Badge.ico</c>——也就是托盘用的那张「wifi + 文件」图，
+/// 图形与任务栏主图标完全一致，叠上去就是"图标盖图标"，用户看到的是两个 logo 重叠。
+/// 任务栏 overlay 的语义是「状态标记」，所以这里现画一个橙底白色上下箭头：
+/// 尺寸小、透明底、与主图标不冲突。
+///
 /// 用 <see cref="Window.TaskbarItemInfo"/> 而不是托盘气泡：角标是"状态"，气泡是"事件"，
 /// 传输可能持续几分钟，弹气泡会一直骚扰。
 /// </summary>
@@ -43,7 +48,7 @@ internal static class TaskbarBadge
         try
         {
             window.TaskbarItemInfo ??= new TaskbarItemInfo();
-            window.TaskbarItemInfo.Overlay = on ? (_image ??= Load()) : null;
+            window.TaskbarItemInfo.Overlay = on ? (_image ??= Create()) : null;
         }
         catch (Exception ex)
         {
@@ -51,7 +56,11 @@ internal static class TaskbarBadge
         }
     }
 
-    private static ImageSource? Load()
+    /// <summary>
+    /// 画一枚 32×32 的徽章：白色描边 + 橙色圆底 + 白色上下箭头。
+    /// 给 32 而不是 16，让系统在高 DPI 下自己缩，16 会糊。
+    /// </summary>
+    private static ImageSource? Create()
     {
         if (_loadFailed)
         {
@@ -60,31 +69,46 @@ internal static class TaskbarBadge
 
         try
         {
-            var stream = Application.GetResourceStream(
-                new Uri("assets/WirelessCable.Badge.ico", UriKind.Relative))?.Stream;
+            const int size = 32;
+            var center = new Point(size / 2.0, size / 2.0);
 
-            if (stream is null)
+            var accent = new SolidColorBrush(Color.FromRgb(0xEF, 0x8A, 0x2B));
+            accent.Freeze();
+            var arrow = new Pen(Brushes.White, 2.6)
             {
-                _loadFailed = true;
-                return null;
+                StartLineCap = PenLineCap.Round,
+                EndLineCap = PenLineCap.Round,
+                LineJoin = PenLineJoin.Round,
+            };
+            arrow.Freeze();
+
+            var visual = new DrawingVisual();
+            using (var dc = visual.RenderOpen())
+            {
+                // 白圈先把徽章和任务栏底色分开：浅色主题下没有这层就看不见边界
+                dc.DrawEllipse(Brushes.White, null, center, 15, 15);
+                dc.DrawEllipse(accent, null, center, 12.5, 12.5);
+
+                // 上箭头
+                dc.DrawLine(arrow, new Point(11.6, 19.4), new Point(11.6, 11.2));
+                dc.DrawLine(arrow, new Point(8.6, 14.4), new Point(11.6, 11.2));
+                dc.DrawLine(arrow, new Point(14.6, 14.4), new Point(11.6, 11.2));
+
+                // 下箭头
+                dc.DrawLine(arrow, new Point(20.4, 12.6), new Point(20.4, 20.8));
+                dc.DrawLine(arrow, new Point(17.4, 17.6), new Point(20.4, 20.8));
+                dc.DrawLine(arrow, new Point(23.4, 17.6), new Point(20.4, 20.8));
             }
 
-            using (stream)
-            // 32px 那帧：高 DPI 下系统会自己缩，直接给 16px 会糊
-            using (var icon = new System.Drawing.Icon(stream, new System.Drawing.Size(32, 32)))
-            {
-                var source = System.Windows.Interop.Imaging.CreateBitmapSourceFromHIcon(
-                    icon.Handle,
-                    Int32Rect.Empty,
-                    BitmapSizeOptions.FromEmptyOptions());
-                source.Freeze();
-                return source;
-            }
+            var bitmap = new RenderTargetBitmap(size, size, 96, 96, PixelFormats.Pbgra32);
+            bitmap.Render(visual);
+            bitmap.Freeze();
+            return bitmap;
         }
         catch (Exception ex)
         {
             _loadFailed = true;
-            Serilog.Log.Debug(ex, "加载任务栏角标失败");
+            Serilog.Log.Debug(ex, "绘制任务栏角标失败");
             return null;
         }
     }

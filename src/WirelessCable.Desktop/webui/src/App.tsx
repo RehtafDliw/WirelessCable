@@ -2,7 +2,7 @@ import { useEffect, useReducer, useRef, useState } from 'react';
 import { Badge, Button, Dialog, useOink } from 'oink-ui';
 import { Icon } from './Icon';
 import { api, type DevicesResponse, type Status } from './api';
-import { host, isDesktop } from './host';
+import { host, isDesktop, setWindowTheme } from './host';
 import { useApi } from './useApi';
 import {
   HomePage,
@@ -106,6 +106,22 @@ export function App() {
 
   // 主题由 OinkProvider 统一管理，切换走它的圆形揭开过渡
   const { resolvedTheme, setTheme } = useOink();
+
+  // 原生标题栏跟着主题走：深色时不至于顶上挂一条白边，浅色时也和侧栏一个色。
+  // 必须等一帧再读 CSS 变量——同一帧里 setTheme 还没把变量刷到 :root 上。
+  useEffect(() => {
+    const id = requestAnimationFrame(() => {
+      const style = getComputedStyle(document.documentElement);
+      void setWindowTheme(
+        resolvedTheme === 'dark' ? 'dark' : 'light',
+        style.getPropertyValue('--ok-surface').trim(),
+        style.getPropertyValue('--ok-text').trim(),
+      );
+    });
+
+    return () => cancelAnimationFrame(id);
+  }, [resolvedTheme]);
+
   const meta = TITLES[page] ?? TITLES.home;
 
   return (
@@ -164,6 +180,21 @@ export function App() {
         >
           {getLang() === 'zh' ? 'English' : '中文'}
         </button>
+
+        {/* 手机浏览器访问这台电脑就能下安装包 —— 不用把 APK 传来传去 */}
+        <a
+          href="/download/android"
+          download="WirelessCable.apk"
+          style={{
+            margin: '0 16px 8px',
+            color: 'var(--ok-text-2)',
+            font: '500 12px/1 var(--ok-font)',
+            textDecoration: 'underline',
+          }}
+          title={t('在手机上打开这个链接，下载并安装手机版')}
+        >
+          {t('下载手机版')}
+        </a>
 
         <div className="wc-status">
           <span className="wc-status__dot" />

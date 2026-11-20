@@ -221,7 +221,7 @@ public sealed class MdnsAdvertiser : IDisposable
     /// <list type="bullet">
     /// <item>Android 的 NSD 只返回**第一条** A 记录，而库会按自己的顺序重排地址，
     /// 客户端无法选择；多网卡时曾解析到 Hyper-V 的 172.22.80.1 与电脑 Wi-Fi 的
-    /// 172.17.13.108，两者手机都连不上。</item>
+    /// 198.51.100.108，两者手机都连不上。</item>
     /// <item>因此默认只广播「系统出站源地址」这一条，即路由表真正会用的网卡。</item>
     /// <item>显式传入地址时按传入值广播（测试与特殊场景）。</item>
     /// </list>
@@ -231,19 +231,21 @@ public sealed class MdnsAdvertiser : IDisposable
     {
         var instanceName = BuildInstanceName(advertisement);
 
-        IReadOnlyList<IPAddress> addresses;
+        // A 记录：默认只放"系统出站源地址"这一条。
+        // Android 的 NSD 只返回第一条 A 记录，多放会让客户端拿到不可达的那个（见上面的注释）。
+        IReadOnlyList<IPAddress> recorded;
         if (advertisement.Addresses is { Count: > 0 })
         {
-            addresses = advertisement.Addresses;
+            recorded = advertisement.Addresses;
         }
         else
         {
             var primary = LanAddressProvider.GetPrimaryIPv4Address();
-            addresses = primary is null ? [] : [primary];
+            recorded = primary is null ? [] : [primary];
         }
 
-        var profile = addresses.Count > 0
-            ? new ServiceProfile(instanceName, advertisement.ServiceType, (ushort)advertisement.Port, addresses)
+        var profile = recorded.Count > 0
+            ? new ServiceProfile(instanceName, advertisement.ServiceType, (ushort)advertisement.Port, recorded)
             : new ServiceProfile(instanceName, advertisement.ServiceType, (ushort)advertisement.Port);
 
         profile.AddProperty("id", advertisement.DeviceId);
@@ -258,10 +260,19 @@ public sealed class MdnsAdvertiser : IDisposable
         profile.AddProperty("suite", advertisement.PairingSuite);
         profile.AddProperty("role", "pc");
 
-        // 多网卡时客户端拿到的 A 记录未必可达，TXT 里给出全部候选地址供其择优
-        if (addresses.Count > 0)
+        // TXT 的 addrs：给**全部**本地地址，不只是 A 记录那一条。
+        //
+        // 为什么必须给全部：A 记录只有主地址，而"主地址"是按默认路由选的。
+        // 典型翻车场景是「电脑同时插网线和手机热点」——主地址是以太网，
+        // 手机只在热点网段，扫到 mDNS 也连不上主地址。手机端会把这个列表按
+        // "与自身同子网"排序后逐个尝试（LocalSubnet.preferLocal），多给几条才有得选。
+        IReadOnlyList<IPAddress> candidates = advertisement.Addresses is { Count: > 0 }
+            ? advertisement.Addresses
+            : LanAddressProvider.GetLocalIPv4Addresses();
+
+        if (candidates.Count > 0)
         {
-            profile.AddProperty("addrs", string.Join(",", addresses));
+            profile.AddProperty("addrs", string.Join(",", candidates));
         }
 
         return profile;

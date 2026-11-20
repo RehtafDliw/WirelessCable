@@ -11,6 +11,9 @@ object FileProtocol {
     const val DEVICE_INDEX_SYNC_PATH = "$FS_PATH/device/index/sync"
     const val DEVICE_JOBS_PATH = "$FS_PATH/device/jobs"
 
+    /** 整批暂停/恢复队列里还没执行的作业（见服务端 FileDeviceJobsControlPath）。 */
+    const val DEVICE_JOBS_CONTROL_PATH = "$FS_PATH/device/jobs/control"
+
     /** 根类型。 */
     const val KIND_SHARED = "shared"
     const val KIND_DEVICE = "device"
@@ -43,6 +46,15 @@ object FileProtocol {
     const val JOB_RUNNING = "running"
     const val JOB_COMPLETED = "completed"
     const val JOB_FAILED = "failed"
+
+    /** 电脑点了暂停：作业留在队列里，恢复后会被重新取走。 */
+    const val JOB_PAUSED = "paused"
+
+    /** 电脑取消/删了这批：作业作废，别再执行，也别再回报。 */
+    const val JOB_CANCELLED = "cancelled"
+
+    /** 续租时作业已经不在了（被删/被回收）。 */
+    const val JOB_GONE = "gone"
 }
 
 @Serializable
@@ -134,6 +146,19 @@ data class FileJobRequest(
     val displayName: String? = null,
 )
 
+/** 整批暂停/恢复作业队列。 */
+@Serializable
+data class FileJobControlRequest(
+    val destinationPath: String? = null,
+    val action: String,
+)
+
+@Serializable
+data class FileJobControlResult(
+    val changed: Int = 0,
+    val action: String? = null,
+)
+
 @Serializable
 data class FileJobDto(
     val jobId: String,
@@ -144,6 +169,12 @@ data class FileJobDto(
     val displayName: String? = null,
     val transferTaskId: String? = null,
     val destinationDirectoryId: String? = null,
+    /** 本批共多少个文件（整文件夹拉取时电脑下发）；null/0 = 未知。 */
+    val batchTotal: Int? = null,
+    /** 本批对应的文件夹名（显示用）。 */
+    val batchName: String? = null,
+    /** 本批所有文件的总字节数（进度条的分母）；null/0 = 未知。 */
+    val batchTotalBytes: Long? = null,
     val status: String = FileProtocol.JOB_PENDING,
     val errorCode: String? = null,
     val errorMessage: String? = null,
@@ -158,6 +189,18 @@ data class FileJobResult(
     /** list 作业回传的目录条目（FileEntryDto[] 的 JSON）；其他操作为 null。 */
     val payload: String? = null,
 )
+
+/** 续租响应：作业当前状态（running / paused / cancelled / gone）。 */
+@Serializable
+data class JobLeaseDto(val status: String = FileProtocol.JOB_RUNNING)
+
+/** 把建出来的传输任务挂到作业上。 */
+@Serializable
+data class JobTaskAttachRequest(val taskId: String)
+
+/** 通用 ack（`/jobs/{id}/task` 之类只回 ok 的接口）。 */
+@Serializable
+data class JobAckDto(val ok: Boolean = true)
 
 /** 手机上报授权目录索引的负载。 */
 @Serializable

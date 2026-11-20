@@ -24,11 +24,19 @@ class ConnectionRepository(database: AppDatabase) {
         settingsDao.put(com.wirelesscable.app.data.db.AppSettingsEntity(KEY_FINGERPRINT, fingerprint))
     }
 
-    suspend fun loadHost(): String? = settingsDao.get(KEY_HOST)
+    /**
+     * 设置页输入框预填的地址：**有会话时以会话为准**。
+     *
+     * `connection.*` 这组键会被"连接另一台电脑"的尝试改写（`rememberEndpoint`），
+     * 但那次可能只通了 health、并没有配对成功。如果输入框读的是它，
+     * 就会出现"界面显示 A 电脑、实际心跳走 B 电脑"——两边各说各话，
+     * 用户只会觉得"这软件显示的和做的不一样"。
+     */
+    suspend fun loadHost(): String? = loadSession()?.host ?: settingsDao.get(KEY_HOST)
 
-    suspend fun loadPort(): String? = settingsDao.get(KEY_PORT)
+    suspend fun loadPort(): String? = loadSession()?.port?.toString() ?: settingsDao.get(KEY_PORT)
 
-    suspend fun loadFingerprint(): String? = settingsDao.get(KEY_FINGERPRINT)
+    suspend fun loadFingerprint(): String? = loadSession()?.fingerprint ?: settingsDao.get(KEY_FINGERPRINT)
 
     suspend fun allDevices(): List<DeviceEntity> = deviceDao.getAll()
 

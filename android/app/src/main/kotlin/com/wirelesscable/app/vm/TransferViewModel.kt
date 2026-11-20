@@ -11,12 +11,14 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.wirelesscable.app.core.files.InboxStore
+import com.wirelesscable.app.core.files.SavedFiles
 import com.wirelesscable.app.core.network.ApiOutcome
 import com.wirelesscable.app.core.network.FileApi
 import com.wirelesscable.app.core.network.ServerEndpoint
 import com.wirelesscable.app.core.network.TransferApi
 import com.wirelesscable.app.core.protocol.FileProtocol
 import com.wirelesscable.app.core.protocol.TransferDirections
+import com.wirelesscable.app.core.protocol.TransferErrorCodes
 import com.wirelesscable.app.core.protocol.TransferTask
 import com.wirelesscable.app.core.protocol.TransferStates
 import com.wirelesscable.app.core.transfer.InboxReceiver
@@ -29,6 +31,7 @@ import com.wirelesscable.app.data.repository.ConnectionRepository
 import com.wirelesscable.app.data.security.TokenVault
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -106,6 +109,43 @@ class TransferViewModel(
      */
     private val pausedBatches = mutableSetOf<String>()
 
+    /**
+     * 任务 → 批 key。
+     *
+     * 服务端只给"批量接口"建出来的任务写 batchId；逐条建的（上传、整文件夹落盘）
+     * 没有，只能由手机在创建时记一笔。没有这张表，点暂停时找不到"这一批还有哪些
+     * 文件没开始"，恢复时也就无从接着跑。
+     */
+    private val taskBatchKeys = mutableMapOf<String, String>()
+
+    /** 整文件夹落盘的全量任务与目录树：暂停后要能从头续（已完成的跳过）。 */
+    private data class FolderBatchState(
+        val name: String,
+        val tasks: List<TransferTask>,
+        val treeUri: Uri,
+    )
+
+    /** 一批待上传的来源与进度：暂停后从 [next] 接着来。 */
+    private data class UploadBatchState(
+        val items: List<UploadItem>,
+        val target: UploadTarget?,
+        var next: Int = 0,
+        /**
+         * 已建出来的任务（下标 → taskId）。
+         *
+         * 传输中断时服务端那边已经有任务与分块了，恢复必须**续传它**；
+         * 再调一次 upload 会新建一个同名任务，列表里出现两条、文件传两遍。
+         */
+        val taskIds: MutableMap<Int, String> = mutableMapOf(),
+    )
+
+    private val folderBatches = mutableMapOf<String, FolderBatchState>()
+    private val uploadBatches = mutableMapOf<String, UploadBatchState>()
+
+    /** 批落的驱动协程（一次只跑一个：并行写同一个 SAF 目录会互相干扰）。 */
+    private var folderJob: Job? = null
+    private val queuedFolderPumps = ArrayDeque<String>()
+    private val queuedUploadPumps = ArrayDeque<String>()
 
     /**
      * 取出（或创建）传输引擎。
@@ -139,7 +179,35 @@ class TransferViewModel(
                             )
                         }
 
+                        // **对方取消后，已经落到手机上的文件也要删掉**：
+                        // 取消 = 记录和数据都清掉（需求：不管哪一端取消，两端都同步清理）。
+                        // 引擎没有 SAF 权限，它把落点交出来，这里删。
+                        current.drainCancelledSavedUris().forEach { uri ->
+                            runCatching { SavedFiles.delete(resolver, uri) }
+                        }
+
                         if (error == null) {
+                            // 另一端（电脑）点了暂停：服务端把这一批标成 paused。
+                            // 这里必须把它记成"整批暂停"，否则泵会接着开始下一个文件，
+                            // 批也会在 finally 里被丢掉——用户点「继续」时根本拉不起来。
+                            _state.value.items
+                                .filter { it.state == TransferStates.PAUSED }
+                                .mapNotNull { taskBatchKeys[it.taskId] }
+                                .forEach { pausedBatches += it }
+
+                            // 反过来：服务端已经恢复（不再是 paused），把被按住的批放行并重启泵。
+                            // 电脑端点「继续」时手机这边没有任何本地动作，靠这一段把传输唤醒。
+                            _state.value.items
+                                .filter { it.state != TransferStates.PAUSED && it.isActive }
+                                .mapNotNull { taskBatchKeys[it.taskId] }
+                                .forEach { key ->
+                                    if (key in pausedBatches) {
+                                        pausedBatches -= key
+                                        if (folderBatches.containsKey(key)) pumpFolderBatch(key)
+                                        if (uploadBatches.containsKey(key)) pumpUploads(key)
+                                    }
+                                }
+
                             resumeInterrupted(current)
                             refreshUploadTargets()
                             nudgeReceive()
@@ -273,6 +341,23 @@ class TransferViewModel(
             return
         }
 
+        // 整批存下来：暂停只是把这个泵停住，恢复时从下一个接着发。
+        // 以前循环体直接写在这里，协程一取消整批就没了，点「继续」只在恢复
+        // 已经建出任务的那一个，剩下的永远不会再发（"暂停了不能恢复"）。
+        val key = "up:${System.currentTimeMillis()}"
+        uploadBatches[key] = UploadBatchState(items, target)
+        pausedBatches -= key
+        pumpUploads(key)
+    }
+
+    /** 串行发送一批来源；[pausedBatches] 命中时停下，进度停在 [UploadBatchState.next]。 */
+    private fun pumpUploads(key: String) {
+        val batch = uploadBatches[key] ?: return
+        if (uploadJob?.isActive == true) {
+            if (key !in queuedUploadPumps) queuedUploadPumps += key
+            return
+        }
+
         uploadJob = viewModelScope.launch {
             val current = ensureEngine()
             if (current == null) {
@@ -287,7 +372,19 @@ class TransferViewModel(
             var firstError: String? = null
 
             try {
-                for (item in items) {
+                while (batch.next < batch.items.size) {
+                    if (key in pausedBatches) break
+
+                    val index = batch.next
+                    val item = batch.items[index]
+
+                    // 对方把这一条取消了：停下，别再往电脑推
+                    val builtTask = batch.taskIds[index]
+                    if (builtTask != null && current.isCancelledByPeer(builtTask)) {
+                        pausedBatches += key
+                        break
+                    }
+
                     // 授权持久化：APP 被杀后重新打开仍能凭 Room 里的 URI 续传
                     // （file:// 没有可持久化的授权，抛异常也无所谓）
                     runCatching {
@@ -297,19 +394,68 @@ class TransferViewModel(
                         )
                     }
 
-                    val directoryId = target?.directoryId ?: _state.value.selectedUploadTargetId
-                    val relativeDirectory = target?.relativeDirectory
+                    // 这一项上次已经建过任务（中断/暂停）：续传它，别再新建一个同名任务
+                    val builtTaskId = batch.taskIds[index]
+                    if (builtTaskId != null) {
+                        when (val resumed = current.resumeUpload(builtTaskId, allowResume = false)) {
+                            is TransferResult.Ok -> {
+                                batch.next++
+                                ok++
+                            }
+
+                            is TransferResult.Failed -> {
+                                batch.next++
+                                if (firstError == null) firstError = resumed.message
+                            }
+
+                            is TransferResult.Interrupted -> {
+                                interrupted++
+                                break
+                            }
+
+                            TransferResult.Cancelled -> {
+                                // 被暂停：保留这一批，用户点「继续」时还能接着发
+                                pausedBatches += key
+                                break
+                            }
+                        }
+                        continue
+                    }
+
+                    val directoryId = batch.target?.directoryId ?: _state.value.selectedUploadTargetId
+                    val relativeDirectory = batch.target?.relativeDirectory
                     val result = current.upload(
                         item.uri,
                         directoryId = directoryId,
                         relativeDirectory = relativeDirectory,
                         displayName = item.displayName,
+                        onTaskCreated = { taskId ->
+                            batch.taskIds[index] = taskId
+                            taskBatchKeys[taskId] = key
+                        },
                     )
                     when (result) {
-                        is TransferResult.Ok -> ok++
-                        is TransferResult.Failed -> if (firstError == null) firstError = result.message
-                        is TransferResult.Interrupted -> interrupted++
-                        TransferResult.Cancelled -> break
+                        is TransferResult.Ok -> {
+                            batch.next++
+                            ok++
+                        }
+
+                        is TransferResult.Failed -> {
+                            batch.next++
+                            if (firstError == null) firstError = result.message
+                        }
+
+                        // 中断不前进：恢复后从同一个文件重来（引擎按位图续传，不会重传已完成分块）
+                        is TransferResult.Interrupted -> {
+                            interrupted++
+                            break
+                        }
+
+                        TransferResult.Cancelled -> {
+                            // 被暂停/被取消：保留批，别在 finally 里丢掉
+                            pausedBatches += key
+                            break
+                        }
                     }
                 }
             } finally {
@@ -317,14 +463,24 @@ class TransferViewModel(
                     it.copy(
                         busy = false,
                         message = when {
-                            items.size == 1 && firstError != null -> firstError
-                            firstError != null -> "已发送 $ok 个，${items.size - ok} 个失败：$firstError"
+                            key in pausedBatches -> it.message
+                            batch.items.size == 1 && firstError != null -> firstError
+                            firstError != null -> "已发送 $ok 个，${batch.items.size - ok} 个失败：$firstError"
                             interrupted > 0 -> "连接中断，$interrupted 个任务将在恢复后续传"
-                            else -> null
+                            else -> it.message
                         },
                     )
                 }
+                uploadJob = null
+                if (key !in pausedBatches) uploadBatches.remove(key)
+                drainUploadPumps()
             }
+        }
+    }
+
+    private fun drainUploadPumps() {
+        while (uploadJob?.isActive != true && queuedUploadPumps.isNotEmpty()) {
+            pumpUploads(queuedUploadPumps.removeFirst())
         }
     }
 
@@ -403,8 +559,10 @@ class TransferViewModel(
     /**
      * 收一整批（整个文件夹）到用户选的目录树里，**保留子目录结构**。
      *
-     * 任务已经由服务端建好并随响应带回来，这里只负责逐个落盘。
-     * 子目录用 DocumentsContract 一层层建；已存在的目录复用（不重复建）。
+     * 全量任务与目录树要留在内存里（[folderBatches]）：暂停后点「继续」时，
+     * 还没建出任务的那些文件得有人接着跑。以前这个 for 循环一 break 就没了，
+     * 恢复只恢复"已经建过任务的"几十个，剩下的永远不再传——用户看到的就是
+     * "暂停了不能恢复"。
      */
     fun saveFolderBatch(batchName: String, tasks: List<TransferTask>, treeUri: Uri) {
         if (tasks.isEmpty()) return
@@ -413,52 +571,144 @@ class TransferViewModel(
             return
         }
 
-        viewModelScope.launch {
+        val key = tasks.firstOrNull()?.batchId?.takeIf { it.isNotBlank() } ?: "dir:$batchName"
+        folderBatches[key] = FolderBatchState(batchName, tasks, treeUri)
+        pausedBatches -= key
+        pumpFolderBatch(key)
+    }
+
+    /** 串行把一批文件落到用户目录；已完成的跳过，暂停的续传。 */
+    private fun pumpFolderBatch(key: String) {
+        val batch = folderBatches[key] ?: return
+        if (folderJob?.isActive == true) {
+            // 同一个 SAF 目录并行写会互相干扰：排队，等当前这批跑完
+            if (key !in queuedFolderPumps) queuedFolderPumps += key
+            return
+        }
+
+        folderJob = viewModelScope.launch {
+            val current = ensureEngine()
+            if (current == null) {
+                _state.update { it.copy(message = "尚未连接电脑，请先在「设备」页配对") }
+                return@launch
+            }
+
             _state.update {
-                it.copy(busy = true, message = "正在接收「$batchName」共 ${tasks.size} 个文件")
+                it.copy(busy = true, message = "正在接收「${batch.name}」共 ${batch.tasks.size} 个文件")
             }
 
             var ok = 0
             var failed = 0
             var firstError: String? = null
-            val batchId = tasks.firstOrNull()?.batchId
 
-            for (task in tasks) {
-                // 用户整批暂停/取消：循环必须自己停，否则会接着一个个拉下去
-                if (batchId != null && batchId in pausedBatches) break
+            try {
+                for (task in batch.tasks) {
+                    // 用户整批暂停/取消：循环必须自己停，否则会接着一个个拉下去
+                    if (key in pausedBatches) break
 
-                // relativePath 形如「文件夹名/子目录/文件名」；用户选的目标目录就是"文件夹名"的位置
-                val segments = task.relativePath
-                    .split('/')
-                    .filter { it.isNotBlank() }
-                    .drop(1)
-                    .toMutableList()
-                segments.add(task.fileName)
+                    // **对方把这一条（多半是整批）取消了**：停下。
+                    // 继续跑下去的话，每个文件都会去服务端问一次、再失败一次，
+                    // 手机端冒出一堆"已取消"的行（真机：电脑取消作业后手机还能看到）。
+                    if (current.isCancelledByPeer(task.taskId)) {
+                        pausedBatches += key
+                        break
+                    }
 
-                val target = createDocumentAt(treeUri, segments)
-                if (target == null) {
-                    failed++
-                    firstError = firstError ?: "建不出 ${task.relativePath}"
-                    continue
+                    // 另一端已经把这条取消/传完了：跳过，别再建文件重传
+                    val live = _state.value.items.firstOrNull { it.taskId == task.taskId }
+                    if (live != null &&
+                        (live.state == TransferStates.CANCELLED || live.state == TransferStates.COMPLETED)
+                    ) {
+                        continue
+                    }
+
+                    val entity = runCatching { db.transferDao().get(task.taskId) }.getOrNull()
+                    if (entity != null && entity.status != TransferStates.PAUSED) {
+                        // 已完成/正在跑/失败中断的都不归这个泵管（中断由自动恢复接手）
+                        continue
+                    }
+
+                    // relativePath 形如「文件夹名/子目录/文件名」，而用户选的目标目录是**父目录**，
+                    // 所以整段原样保留：文件落到「所选目录/文件夹名/子目录/文件名」。
+                    //
+                    // 以前这里是 `drop(1)` 去掉文件夹名、再 `add(fileName)`，于是变成
+                    // 「所选目录/a.jpg/a.jpg」——每个文件都建了一个和自己同名的文件夹，
+                    // 文件被塞进那个文件夹里（真机现象：整个文件夹下载完，里面全是同名目录）。
+                    val target = if (entity?.destinationUri != null) {
+                        // 恢复：落点已经建过并记在本地，别在同一个目录里再建一个同名文件
+                        Uri.parse(entity.destinationUri)
+                    } else {
+                        val segments = task.relativePath
+                            .split('/')
+                            .filter { it.isNotBlank() }
+                            .toMutableList()
+
+                        if (segments.isEmpty()) {
+                            segments.add(task.fileName)
+                        } else if (segments.last() != task.fileName) {
+                            // 兜底：老记录 / 异常数据里 relativePath 没有带文件名
+                            segments.add(task.fileName)
+                        }
+
+                        createDocumentAt(batch.treeUri, segments)
+                    }
+
+                    if (target == null) {
+                        failed++
+                        firstError = firstError ?: "建不出 ${task.relativePath}"
+                        continue
+                    }
+
+                    taskBatchKeys[task.taskId] = key
+
+                    val item = _state.value.items.firstOrNull { it.taskId == task.taskId }
+                        ?: transferItemOf(task, task.fileName)
+
+                    // allowResume = false：泵是自动流程，不能顺手把服务端的暂停解掉。
+                    // Cancelled 表示"被暂停/被取消"，整批必须停下——以前这里是 Unit，
+                    // 于是停了当前文件、接着拉下一个，用户看到的就是"暂停停不住"。
+                    when (val result = current.saveDownload(item, target, allowResume = false)) {
+                        is TransferResult.Ok -> ok++
+                        is TransferResult.Failed -> {
+                            failed++
+                            firstError = firstError ?: result.message
+                        }
+
+                        // Cancelled 表示"被暂停/被取消"，整批必须停下——以前这里是 Unit，
+                        // 于是停了当前文件、接着拉下一个，用户看到的就是"暂停停不住"。
+                        // 同时把批标记成暂停：否则 finally 会把批丢掉，用户点「继续」也拉不起来。
+                        else -> {
+                            pausedBatches += key
+                            break
+                        }
+                    }
                 }
-
-                startSave(transferItemOf(task, task.fileName), target)
-                ok++
-                saveJob?.join()
-            }
-
-            _state.update {
-                it.copy(
-                    busy = false,
-                    message = when {
-                        failed > 0 && ok == 0 -> "接收「$batchName」失败：${firstError ?: "建不出目录"}"
-                        failed > 0 -> "「$batchName」已收 $ok 个，$failed 个失败"
-                        else -> "「$batchName」已收到所选目录（$ok 个文件）"
-                    },
-                )
+            } finally {
+                _state.update {
+                    it.copy(
+                        busy = false,
+                        message = when {
+                            key in pausedBatches -> it.message
+                            failed > 0 && ok == 0 -> "接收「${batch.name}」失败：${firstError ?: "建不出目录"}"
+                            failed > 0 -> "「${batch.name}」已收 $ok 个，$failed 个失败"
+                            ok > 0 -> "「${batch.name}」已收到所选目录（$ok 个文件）"
+                            else -> it.message
+                        },
+                    )
+                }
+                folderJob = null
+                if (key !in pausedBatches) folderBatches.remove(key)
+                drainFolderPumps()
             }
         }
     }
+
+    private fun drainFolderPumps() {
+        while (folderJob?.isActive != true && queuedFolderPumps.isNotEmpty()) {
+            pumpFolderBatch(queuedFolderPumps.removeFirst())
+        }
+    }
+
 
     /** 按分段建出目录链并创建文件；已存在的目录直接复用。 */
     private fun createDocumentAt(treeUri: Uri, segments: List<String>): Uri? = try {
@@ -560,6 +810,12 @@ class TransferViewModel(
         purpose = task.purpose,
         sha256 = task.sha256,
         errorMessage = task.errorMessage,
+        updatedAt = task.updatedAtUnixMs,
+        // 落点路径/批次键必须带：保存流程要据此还原多级目录，
+        // 分组也要用它（服务端给了就必须一路传下去，别在中间丢掉）。
+        relativePath = task.relativePath,
+        batchId = task.batchId,
+        batchName = task.batchName,
     )
 
     /**
@@ -646,6 +902,72 @@ class TransferViewModel(
     }
 
     /**
+     * 行上的「取消」确认后：作废队列、删记录、可选删已落盘的文件。
+     *
+     * 和 [cancelTasks] 不同：那个只标取消、记录留着让用户还能看到；
+     * 这个是用户明确不要了，要从列表里消失，并且**不能让电脑继续下发剩下的文件**。
+     */
+    fun cancelAndDelete(taskIds: Collection<String>, deleteFiles: Boolean) {
+        val ids = taskIds.distinct()
+        if (ids.isEmpty()) return
+
+        val items = _state.value.items.filter { it.taskId in ids }
+        val dirs = items.mapNotNull { dirKeyOf(it) }.distinct()
+
+        // 先让本机这一路停下：停了才删得掉。
+        // 以前这里只作废队列、直接删文件——泵还在跑（整文件夹的循环、恢复协程），
+        // 删完的目录马上又被写回去，用户看到的就是"勾了删除，文件还在"。
+        items.forEach { item ->
+            val key = item.batchId?.takeIf { it.isNotBlank() } ?: taskBatchKeys[item.taskId]
+            if (!key.isNullOrBlank()) pausedBatches += key
+        }
+        ids.forEach { resumeJobs.remove(it)?.cancel() }
+
+        viewModelScope.launch {
+            val current = ensureEngine()
+
+            uploadJob?.takeIf { it.isActive }?.cancelAndJoin()
+            saveJob?.takeIf { it.isActive }?.cancelAndJoin()
+            folderJob?.takeIf { it.isActive }?.cancelAndJoin()
+
+            // 1) 队列里还没执行的整批作废：不作废的话手机会继续传，删了也白删
+            dirs.forEach { dir -> current?.controlQueuedJobs(dir, "cancel") }
+
+            // 2) 已落盘的文件（只有勾了"同时删除"才删）
+            val outcome = if (deleteFiles) deleteSavedFiles(items) else DeleteOutcome.None()
+
+            // 3) 本机记录与列表
+            ids.forEach { id -> runCatching { db.transferDao().delete(id) } }
+            current?.forget(ids)
+
+            // 4) 批状态一并作废：留着的话下次「继续」会把已经删掉的文件重新建出来
+            items.forEach { item ->
+                val key = item.batchId?.takeIf { it.isNotBlank() } ?: taskBatchKeys[item.taskId]
+                if (!key.isNullOrBlank()) {
+                    folderBatches.remove(key)
+                    uploadBatches.remove(key)
+                }
+            }
+            ids.forEach { taskBatchKeys.remove(it) }
+
+            // 5) 告诉服务端"取消"：作业作废、任务终结、**两端都删记录**
+            //    （删记录是各删各的；取消必须双向，否则另一端还留着已传完的那些）。
+            //    尽力而为：离线不影响本机已经删掉的事实。
+            current?.cancelBatchOnServer(ids, deleteFiles)
+
+            _state.update {
+                it.copy(
+                    selected = emptySet(),
+                    message = buildString {
+                        append("已取消 ${ids.size} 个任务")
+                        append(outcome.describe())
+                    },
+                )
+            }
+        }
+    }
+
+    /**
      * 取消一个任务。
      *
      * 本机正在跑的任务要连协程一起停：只发取消请求的话，在途的分块还会继续落到
@@ -665,19 +987,19 @@ class TransferViewModel(
         val items = _state.value.items.filter { it.taskId in ids }
         // 批量落盘的循环靠这个标志自己停：只取消 saveJob 的话，
         // join 一返回它就会接着拉下一个文件
-        items.mapNotNull { it.batchId }.forEach { pausedBatches += it }
+        items.forEach { item ->
+            val key = item.batchId?.takeIf { it.isNotBlank() } ?: taskBatchKeys[item.taskId]
+            if (!key.isNullOrBlank()) pausedBatches += key
+        }
 
         ids.forEach { resumeJobs.remove(it)?.cancel() }
         // 先登记"这是用户点的取消"，否则引擎的取消分支会当成内部取消 → 只标中断
         ids.forEach { engine?.markUserCancelled(it) }
 
-        val running = if (items.any { it.isUpload }) uploadJob else saveJob
-
         viewModelScope.launch {
-            if (running?.isActive == true) {
-                running.cancel()
-                running.join()
-            }
+            uploadJob?.takeIf { it.isActive }?.cancelAndJoin()
+            saveJob?.takeIf { it.isActive }?.cancelAndJoin()
+            folderJob?.takeIf { it.isActive }?.cancelAndJoin()
 
             val current = ensureEngine() ?: return@launch
             current.cancelAll(ids)
@@ -704,51 +1026,219 @@ class TransferViewModel(
         if (ids.isEmpty()) return
 
         val items = _state.value.items.filter { it.taskId in ids }
-        items.mapNotNull { it.batchId }.forEach { pausedBatches += it }
 
-        val running = if (items.any { it.isUpload }) uploadJob else saveJob
+        // 批 key 可能来自服务端（批量接口建的任务），也可能是手机自己登记的上传/落盘批
+        items.forEach { item ->
+            val key = item.batchId?.takeIf { it.isNotBlank() } ?: taskBatchKeys[item.taskId]
+            if (!key.isNullOrBlank()) pausedBatches += key
+        }
+
+        // 正在恢复的任务也算"在跑"：不停掉的话，点了暂停它们还会接着传
+        ids.forEach { resumeJobs.remove(it)?.cancel() }
+
+        // 队列里还没执行的文件没有任务可暂停；按落点目录先把作业停住，
+        // 否则暂停后手机还会继续取走剩下的（用户看到的就是"按了暂停还在传"）
+        val dirs = items.mapNotNull { dirKeyOf(it) }.distinct()
 
         viewModelScope.launch {
             val current = ensureEngine() ?: return@launch
+
+            dirs.forEach { dir -> current.controlQueuedJobs(dir, "pause") }
 
             current.pauseAll(ids)?.let { message ->
                 _state.update { it.copy(message = message) }
             }
 
-            if (running?.isActive == true) {
-                running.cancel()
-            }
+            // 三个驱动都要停：一批里可能混着上传、单文件落盘和整文件夹落盘
+            uploadJob?.takeIf { it.isActive }?.cancel()
+            saveJob?.takeIf { it.isActive }?.cancel()
+            folderJob?.takeIf { it.isActive }?.cancel()
         }
     }
 
-    /** 继续一个已暂停的任务：按本地记录里的凭据续传，不重传已完成分块。 */
     /**
      * 继续一批已暂停的任务。
      *
-     * 落点沿用 Room 里记的 URI（整文件夹是逐个文件记的），不用重新选目录。
-     * 一个接一个来：并行写同一个 SAF 目录会互相干扰。
+     * 以前这里有两个致命点：
+     * 1) `saveJob/uploadJob` 还活着就直接 return —— 暂停只 cancel 不 join，
+     *    用户立刻点「继续」等于什么都没发生（"暂停了不能恢复"）；
+     * 2) 恢复是逐个 `join()` 串行跑的，`saveDownload` 要传完整个文件才返回，
+     *    43 个任务只会在后台排队，界面上看就是卡住不动。
+     *
+     * 现在：先把上一次的驱动协程收干净，放行服务端队列，再把批的泵重新拉起来；
+     * 剩下的单任务用 2 个并发恢复，失败原因直接显示，不再静默。
      */
     fun resumeTasks(taskIds: Collection<String>) {
-        val items = _state.value.items.filter { it.taskId in taskIds && it.state == TransferStates.PAUSED }
-        if (items.isEmpty()) return
-        if (saveJob?.isActive == true || uploadJob?.isActive == true) return
+        val ids = taskIds.distinct()
+        if (ids.isEmpty()) return
 
-        items.mapNotNull { it.batchId }.forEach { pausedBatches -= it }
+        val items = _state.value.items.filter { it.taskId in ids && it.state == TransferStates.PAUSED }
+        if (items.isEmpty()) return
+
+        // 找到这些任务所属的批，先放行
+        val keys = items
+            .mapNotNull { item -> item.batchId?.takeIf { it.isNotBlank() } ?: taskBatchKeys[item.taskId] }
+            .distinct()
+        keys.forEach { pausedBatches -= it }
+
+        val dirs = items.mapNotNull { dirKeyOf(it) }.distinct()
 
         viewModelScope.launch {
-            val current = ensureEngine() ?: return@launch
+            val current = ensureEngine()
+            if (current == null) {
+                _state.update { it.copy(message = "尚未连接电脑，请先在「设备」页配对") }
+                return@launch
+            }
 
-            items.forEach { item ->
-                if (item.isUpload) {
-                    current.resumeUpload(item.taskId)
-                    return@forEach
-                }
+            // 上一次暂停的协程可能还在收尾（引擎在取消分支里写状态）。等它结束，
+            // 别让两路同时写同一个任务。
+            uploadJob?.takeIf { it.isActive }?.cancelAndJoin()
+            saveJob?.takeIf { it.isActive }?.cancelAndJoin()
 
-                saveJob = viewModelScope.launch { current.saveDownload(item, null) }
-                saveJob?.join()
+            // 先把队列放行，再恢复任务：顺序反过来会让作业停在 paused 里没人取
+            dirs.forEach { dir -> current.controlQueuedJobs(dir, "resume") }
+
+            // **显式告诉服务端"这些要继续"**：泵是自动流程，不碰服务端状态，
+            // 少了这一步，用户点「继续」后泵虽然重跑，服务端仍是 paused，
+            // 第一块就被 409 顶回来——表现为"点了继续没反应"。
+            val resumeError = current.resumeBatch(ids)
+            if (resumeError != null) {
+                _state.update { it.copy(message = resumeError) }
+                return@launch
+            }
+
+            // 批里还没建任务的文件：把泵重新拉起来（已完成的跳过、暂停的续传）
+            keys.forEach { key ->
+                if (folderBatches.containsKey(key)) pumpFolderBatch(key)
+                if (uploadBatches.containsKey(key)) pumpUploads(key)
+            }
+
+            // 泵会自己处理批内任务，这里只恢复"不属于任何批"的
+            val singles = items.filter { item ->
+                val key = item.batchId?.takeIf { it.isNotBlank() } ?: taskBatchKeys[item.taskId]
+                key == null || (!folderBatches.containsKey(key) && !uploadBatches.containsKey(key))
+            }
+
+            singles.forEach { item ->
+                while (resumeJobs.size >= MAX_RESUME_WORKERS) delay(100)
+                startRestore(current, item)
             }
         }
     }
+
+    /** 恢复一个已暂停的任务；失败原因要显示出来，不能点完毫无反应。 */
+    private fun startRestore(current: TransferEngine, item: TransferItem) {
+        if (resumeJobs.containsKey(item.taskId)) return
+
+        val job = viewModelScope.launch {
+            val entity = runCatching { db.transferDao().get(item.taskId) }.getOrNull()
+            if (entity == null) {
+                _state.update { it.copy(message = "本地记录已不存在，无法续传") }
+                return@launch
+            }
+
+            val result = if (item.isUpload) {
+                if (entity.sourceUri == null) {
+                    _state.update { it.copy(message = "缺少源文件授权，无法续传") }
+                    return@launch
+                }
+                current.resumeUpload(item.taskId)
+            } else {
+                if (entity.destinationUri == null) {
+                    _state.update { it.copy(message = "缺少保存位置，无法续传") }
+                    return@launch
+                }
+                current.saveDownload(item, null)
+            }
+
+            if (result is TransferResult.Failed) {
+                if (result.code == TransferErrorCodes.TRANSFER_CANCELLED) {
+                    // 对面删了这条正在传的任务：继续不会再有任何数据。问用户要不要清记录。
+                    _state.update { it.copy(peerCancelled = it.peerCancelled + item.taskId) }
+                } else {
+                    _state.update { it.copy(message = result.message) }
+                }
+            }
+        }
+
+        resumeJobs[item.taskId] = job
+        job.invokeOnCompletion { resumeJobs.remove(item.taskId) }
+    }
+
+    /**
+     * 落点目录：`destination_path` 就是"相对路径去掉文件名"那一段。
+     *
+     * 以前只取首段，多级目录（相册/2024）会误伤同名前缀的其它批；
+     * 整批目录对不上时服务端就一个作业都停不住。
+     */
+    private fun dirKeyOf(item: TransferItem): String? {
+        val path = item.relativePath
+        if (path.isBlank()) return item.batchName?.takeIf { it.isNotBlank() }
+
+        val slash = path.lastIndexOf('/')
+        return if (slash > 0) path.substring(0, slash) else item.batchName?.takeIf { it.isNotBlank() }
+    }
+
+    /** 删除本机文件的统计：整个文件夹算 1 项，不再一个个数文件。 */
+    private data class DeleteOutcome(val folders: Int, val files: Int, val failed: Int) {
+        fun describe(): String = buildString {
+            if (folders > 0) append("、删除 $folders 个文件夹")
+            if (files > 0) append("、删除 $files 个文件")
+            if (failed > 0) append("、$failed 项删除失败")
+        }
+
+        companion object {
+            fun None() = DeleteOutcome(0, 0, 0)
+        }
+    }
+
+    /**
+     * 删掉这些任务在本机落下的文件。
+     *
+     * 整文件夹的批按**顶层文件夹整删**（SAF 的 deleteDocument 对目录是递归的）：
+     * 以前一个个删文件，文件没了但一层层空目录全留着，用户还得自己去文件管理器收拾。
+     * 一批只删一次，同批其余条目直接算已删；整删失败才退回逐个文件。
+     */
+    private suspend fun deleteSavedFiles(items: List<TransferItem>): DeleteOutcome {
+        var folders = 0
+        var files = 0
+        var failed = 0
+        // 整删成功的文件夹：同批其余条目跟着算已删，不再逐个碰
+        val removed = mutableSetOf<String>()
+        // 试过整删（失败才退回逐文件，不重复尝试同一个目录）
+        val attempted = mutableSetOf<String>()
+
+        items.filter { !it.isUpload }.forEach { item ->
+            val entity = runCatching { db.transferDao().get(item.taskId) }.getOrNull()
+            val stored = entity?.destinationUri
+            if (stored.isNullOrBlank()) {
+                // 应该是本机文件却找不到落点（服务端合并来的条目没有本地记录）：
+                // 不能装作删了，也不能静默
+                if (item.savedToPhone) failed++
+                return@forEach
+            }
+
+            val folder = SavedFiles.batchFolderOf(stored, item.relativePath)
+            if (folder != null) {
+                if (folder.docId in removed) return@forEach
+
+                if (folder.docId !in attempted) {
+                    attempted += folder.docId
+                    if (SavedFiles.deleteTree(resolver, folder)) {
+                        removed += folder.docId
+                        folders++
+                        return@forEach
+                    }
+                }
+                // 整删失败：退回逐个文件，至少把内容删掉
+            }
+
+            if (SavedFiles.delete(resolver, stored)) files++ else failed++
+        }
+
+        return DeleteOutcome(folders, files, failed)
+    }
+
 
     // ------------------------------------------------------------ 内部
 
@@ -775,11 +1265,15 @@ class TransferViewModel(
 
                 val result = when (item.direction) {
                     TransferDirections.UPLOAD ->
-                        if (entity.sourceUri != null) current.resumeUpload(item.taskId) else null
+                        if (entity.sourceUri != null) {
+                            current.resumeUpload(item.taskId, allowResume = false)
+                        } else {
+                            null
+                        }
 
                     else ->
                         if (entity.destinationUri != null && !InboxStore.isInboxUri(entity.destinationUri)) {
-                            current.saveDownload(item, null)
+                            current.saveDownload(item, null, allowResume = false)
                         } else {
                             null
                         }
@@ -921,47 +1415,57 @@ class TransferViewModel(
     /**
      * 删除选中的传输记录。
      *
-     * [deleteFiles] 只作用于电脑上的文件，而且服务端只会删手机传过去的；
-     * 电脑发过来的文件永远不动。
+     * [deleteFiles] 作用于**本机收到的文件**（电脑发过来的），发出去的文件在电脑上，
+     * 手机没有资格删；服务端的删除接口也只处理手机传过去的那些。
      */
-    fun deleteSelected(deleteFiles: Boolean) {
-        val items = _state.value.selectedItems
+    fun deleteSelected(deleteFiles: Boolean, onlyIds: Collection<String>? = null) {
+        // onlyIds 非空时按任务 id 删（"已被对方取消，要删记录吗"走这条路），
+        // 否则用当前多选。两条路共用同一段删除逻辑，避免清理口径分叉。
+        val items = if (onlyIds == null) {
+            _state.value.selectedItems
+        } else {
+            _state.value.items.filter { it.taskId in onlyIds }
+        }
         if (items.isEmpty()) return
-        val ids = items.map { it.taskId }
+
+        // **正在传的不给删**（需求 4）：传输中的条目只有「取消传输」一个动作。
+        // 删记录是"清理历史"，不该顺手把正在传的这条也终止掉——
+        // 那是"取消"该干的事（取消会双向生效：另一方也停、也删记录）。
+        val deletable = items.filter { !TransferStates.isActive(it.state) }
+        val skipped = items.size - deletable.size
+        if (deletable.isEmpty()) {
+            _state.update { it.copy(message = "选中的任务还在传输，请先取消") }
+            return
+        }
+
+        val ids = deletable.map { it.taskId }
 
         viewModelScope.launch {
-            var filesDeleted = 0
-
-            if (deleteFiles) {
-                items.filter { !it.isUpload }.forEach { item ->
-                    val entity = runCatching { db.transferDao().get(item.taskId) }.getOrNull()
-                    val stored = entity?.destinationUri
-                    val ok = when {
-                        stored.isNullOrBlank() -> false
-                        stored.startsWith("file:") -> runCatching {
-                            val path = Uri.parse(stored).path ?: return@runCatching false
-                            File(path).delete()
-                        }.getOrDefault(false)
-
-                        else -> runCatching {
-                            resolver.delete(Uri.parse(stored), null, null) > 0
-                        }.getOrDefault(false)
-                    }
-                    if (ok) filesDeleted++
-                }
-            }
+            val outcome = if (deleteFiles) deleteSavedFiles(deletable) else DeleteOutcome.None()
 
             // 记录先在本机删掉：断联时电脑删不了，但"我这条记录不要了"是本机的决定。
             // 电脑端只做尽力清理，失败不提示——否则离线时用户根本删不掉任何记录。
             ids.forEach { id -> runCatching { db.transferDao().delete(id) } }
             engine?.forget(ids)
 
+            // 批状态与映射一起清：暂停中的批留着的话，下次点到「继续」
+            // 会把已经删掉的文件重新建一遍（同 cancelAndDelete）
+            items.forEach { item ->
+                val key = item.batchId?.takeIf { it.isNotBlank() } ?: taskBatchKeys[item.taskId]
+                if (!key.isNullOrBlank()) {
+                    folderBatches.remove(key)
+                    uploadBatches.remove(key)
+                }
+            }
+            ids.forEach { taskBatchKeys.remove(it) }
+
             _state.update {
                 it.copy(
                     selected = emptySet(),
                     message = buildString {
                         append("已删除 ${ids.size} 条记录")
-                        if (filesDeleted > 0) append("、$filesDeleted 个文件")
+                        if (skipped > 0) append("（${skipped} 条还在传输，请用「取消任务」）")
+                        append(outcome.describe())
                     },
                 )
             }
@@ -973,6 +1477,20 @@ class TransferViewModel(
                 if (api != null && token != null) api.deleteRecords(token, ids, false)
             }
         }
+    }
+
+    /**
+     * 用户对"传输已被接收方取消"的询问做了选择。
+     *
+     * [delete] 为 true 时按任务 id 走一遍正常删除（记录 + 可选文件），
+     * 否则只把提示关掉、记录留着（用户可能还想留个痕迹）。
+     */
+    fun resolvePeerCancelled(delete: Boolean) {
+        val ids = _state.value.peerCancelled
+        _state.update { it.copy(peerCancelled = emptyList()) }
+        if (!delete || ids.isEmpty()) return
+
+        deleteSelected(deleteFiles = false, onlyIds = ids)
     }
 
     /** 打开已保存到本机的文件（收件目录或用户选定的落点）。 */

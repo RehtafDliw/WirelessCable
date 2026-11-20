@@ -69,6 +69,15 @@ sealed interface FileResult<out T> {
         val message: String,
     ) : FileResult<Nothing>
 
+    /**
+     * 被服务端叫停（暂停 / 取消）。
+     *
+     * 不是失败，也**不能回报**：服务端已经把作业改成 paused/cancelled 了，
+     * 回报一个 failed 会把它覆盖掉，之后"继续"就找不到这个作业
+     * （真机：暂停 → 继续 返回 noop，任务永远停在 3/10）。
+     */
+    data object Halted : FileResult<Nothing>
+
     val ok: Boolean get() = this is Success
 
     companion object {

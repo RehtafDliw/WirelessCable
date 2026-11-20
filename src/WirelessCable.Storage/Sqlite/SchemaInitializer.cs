@@ -21,8 +21,13 @@ public static class SchemaInitializer
     /// v10：machine_access 拆成四档，2 = 可读写（不含删除）、3 = 可读写 + 删除；
     ///      老库的 2 一律抬到 3，否则用户升级后突然删不了文件。
     /// v14：TransferTasks 增加 batch_id / batch_name —— 整文件夹传输在列表里收成一行。
+    /// v15：FileOperationJobs 增加 batch_total / batch_name —— 电脑下发作业时带上"本批共几个"，
+    ///      手机端据此显示整批进度（逐条作业本身不知道总数）。
+    /// v17：FileOperationJobs 增加 lease_until_utc —— 手机取走作业时领的租约。
+    ///      手机执行期间定期续约，续约响应里带回服务端的最新状态（暂停/取消），
+    ///      这样"一次领多个"也不会出现"领走就失控"。
     /// </remarks>
-    public const int SchemaVersion = 14;
+    public const int SchemaVersion = 19;
 
     private const string Ddl =
         """
@@ -224,6 +229,33 @@ public static class SchemaInitializer
 
         // 从 v8 升级：list 作业要把目录条目带回来
         EnsureColumn(connection, transaction, "FileOperationJobs", "result_payload", "TEXT NULL");
+
+        // 从 v14 升级：整文件夹拉取时，电脑把"本批共多少个文件"随作业下发。
+        // 手机端只执行单个作业，天生不知道总数，没有这两列就只能显示"已建出来几条"，
+        // 看起来是"进度 100% 还在传、数量一直在加"。
+        EnsureColumn(connection, transaction, "FileOperationJobs", "batch_total", "INTEGER NULL");
+        EnsureColumn(connection, transaction, "FileOperationJobs", "batch_name", "TEXT NULL");
+
+        // 从 v15 升级：整批总字节。进度条的分母必须稳定——
+        // 传输任务是一条条建出来的，用"已见任务总大小"当分母会越传越小、进度往回跳。
+        EnsureColumn(connection, transaction, "FileOperationJobs", "batch_total_bytes", "INTEGER NULL");
+
+        // 从 v17 升级：作业租约。手机取走时领，执行期间续；续约被拒就说明
+        // 服务端已经暂停/取消，手机立刻停手（一次领多个也不会失控）。
+        EnsureColumn(connection, transaction, "FileOperationJobs", "lease_until_utc", "TEXT NULL");
+
+        // 从 v18 升级：**按端隐藏**传输记录。
+        // 两端共用同一张表，删记录以前是直接删行——手机删掉自己的历史，电脑那边也跟着没了
+        // （用户报的"手机上删了记录，电脑的记录一起消失，文件其实还在"）。
+        // 现在删除 = 记下"这一条对谁不可见"；两端都删过才真正删行、清分块。
+        EnsureColumn(connection, transaction, "TransferTasks", "hidden_for_device", "TEXT NULL");
+
+        // 从 v19 升级：桌面端自己的删除标记。
+        // v18 用一个 hidden_for_device 同时表示两端，导致"谁先删"会影响另一端：
+        // 手机删过之后，电脑再删就被当成"两端都删了"直接删行。
+        // 语义改成各删各的之后必须是两个独立的位——手机用自己的 deviceId，
+        // 桌面用这一列；任何一端删除都只影响自己的视图，不再看另一端删没删。
+        EnsureColumn(connection, transaction, "TransferTasks", "desktop_hidden", "INTEGER NOT NULL DEFAULT 0");
 
         // 从 v2 升级：TransferTasks 增量列
         EnsureColumn(connection, transaction, "TransferTasks", "batch_id", "TEXT NULL");

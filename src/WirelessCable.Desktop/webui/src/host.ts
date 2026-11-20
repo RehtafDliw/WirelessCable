@@ -17,6 +17,8 @@ type HostReply = {
   error?: string;
   path?: string;
   files?: string[];
+  /** base64 data URL（目前只有 fileIcon 用）。 */
+  data?: string;
 };
 
 type WebViewBridge = {
@@ -137,6 +139,49 @@ export async function openFile(path: string): Promise<void> {
   const reply = await host('openFile', { path });
   if (!reply.ok) {
     throw hostFailure(reply.error, '打不开这个文件');
+  }
+}
+
+/**
+ * 取 Windows 的默认文件图标，返回 `data:image/png;base64,...`。
+ *
+ * 只传扩展名：传输记录指向的文件可能早已被移走，按真实路径取图标会失败。
+ * 拿不到时返回 null，由调用方回退到内置图标。
+ */
+export async function fileIcon(ext: string, kind: 'file' | 'folder'): Promise<string | null> {
+  if (!isDesktop()) {
+    return null;
+  }
+
+  try {
+    const reply = await host('fileIcon', { ext, kind });
+    return reply.ok ? (reply.data ?? null) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 把当前主题的标题栏配色交给宿主，让 Windows 的原生标题栏跟着变。
+ *
+ * 不这么做的话：深色界面顶上永远挂一条白色标题栏，浅色下也比侧栏白一截，
+ * 窗口看起来像"框"而不是"一块布"。
+ *
+ * 颜色传的是 CSS 变量算出来的实际值，避免在 C# 里再抄一份主题色。
+ */
+export async function setWindowTheme(
+  theme: 'light' | 'dark',
+  background: string,
+  text: string,
+): Promise<void> {
+  if (!isDesktop()) {
+    return;
+  }
+
+  try {
+    await host('setWindowTheme', { theme, background, text });
+  } catch {
+    // 标题栏配色失败不影响任何功能，忽略
   }
 }
 

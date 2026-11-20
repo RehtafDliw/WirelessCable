@@ -1,5 +1,6 @@
 using System.Net;
 using WirelessCable.Core.Diagnostics;
+using WirelessCable.Infrastructure.Networking;
 using WirelessCable.Protocol;
 using WirelessCable.Server.Identity;
 using WirelessCable.Server.Pairing;
@@ -136,7 +137,15 @@ public sealed class ServerRuntime : ServerRuntimeIdentityProvider
                 uptime,
                 _databaseReady,
                 _lastError,
-                _addresses.Select(static a => a.ToString()).ToArray(),
+                // 地址**每次实时枚举**，不能用启动时那份。
+                //
+                // 移动办公的典型动作是"开手机热点 → 电脑连上去"，这时电脑的 IP 从上一个
+                // 网络换成了 192.168.x.y；缓存值会让二维码（以及 /status、设备端
+                // /device/info）一直写着旧地址，手机扫码必然连不上，且日志上看不出问题。
+                // 枚举网卡是几毫秒的事，调用频率也低（出码、状态轮询），不值得加缓存。
+                LanAddressProvider.GetLocalIPv4Addresses()
+                    .Select(static a => a.ToString())
+                    .ToArray(),
                 Options.AppVersion,
                 ProtocolConstants.CurrentVersion);
         }

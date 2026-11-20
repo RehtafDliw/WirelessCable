@@ -15,11 +15,14 @@
 # 环境变量：
 #   WC_REMOTE   远端名，默认 origin
 #   WC_RETRIES  推送重试次数，默认 4（间隔 5s / 10s / 20s）
+#   WC_SKIP_SMOKE  设为 1 跳过推送前的接口回归
 
 set -uo pipefail
 
 REMOTE="${WC_REMOTE:-origin}"
 RETRIES="${WC_RETRIES:-4}"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PYTHON_BIN="${PYTHON_BIN:-python}"
 
 # 只读镜像前缀（2026-11-18 实测可用）。
 # kkgithub.com / bgithub.xyz 同日测试已失效，别再往回加。
@@ -98,6 +101,30 @@ cmd_check() {
     return 1
 }
 
+# 推代码前先跑接口回归：2 秒，挡住"改 A 坏 B"。
+# 实例没起说明这台机器现在不是验证环境 —— 那不是代码问题，跳过而不是阻断。
+# 要绕开就用 WC_SKIP_SMOKE=1。
+smoke_gate() {
+    if [ "${WC_SKIP_SMOKE:-0}" = "1" ]; then
+        warn "接口回归已跳过（WC_SKIP_SMOKE=1）"
+        return 0
+    fi
+
+    if ! "$PYTHON_BIN" "$ROOT/scripts/smoke-test.py" --probe >/dev/null 2>&1; then
+        warn "接口回归跳过：本机实例没在跑（启动后可补跑 scripts/smoke-test.py）"
+        return 0
+    fi
+
+    say "接口回归（scripts/smoke-test.py）"
+    if "$PYTHON_BIN" "$ROOT/scripts/smoke-test.py"; then
+        ok "接口回归通过"
+        return 0
+    fi
+
+    bad "接口回归失败，已中止推送（要强行推送用 WC_SKIP_SMOKE=1）"
+    return 1
+}
+
 retry_push() {
     local attempt=1 delay=5
     # 走 HTTPS 代理时 Windows 的 schannel 后端常报 "server closed abruptly
@@ -153,6 +180,7 @@ case "${1:---push}" in
     --fetch) fetch_any || { bad "拉取失败"; exit 1; } ;;
     -h|--help) usage ;;
     --push|"")
+        smoke_gate || exit 1
         retry_push && exit 0
         bad "推送失败：重试 $RETRIES 次均未成功"
         cat <<'EOF'

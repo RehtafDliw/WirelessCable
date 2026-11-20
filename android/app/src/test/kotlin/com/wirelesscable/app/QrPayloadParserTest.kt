@@ -21,7 +21,7 @@ class QrPayloadParserTest {
 
     private fun payloadJson(
         expiresAtUnixMs: Long,
-        addresses: List<String> = listOf("172.18.15.63", " 172.18.15.63 ", "300.1.1.1"),
+        addresses: List<String> = listOf("192.0.2.63", " 192.0.2.63 ", "300.1.1.1"),
         nonce: String = "nonce-1",
     ): String {
         val payload = QrPayload(
@@ -48,7 +48,7 @@ class QrPayloadParserTest {
         assertEquals(validFingerprint, payload.fingerprint)
 
         // 去重 + 无效地址过滤
-        assertEquals(listOf("172.18.15.63"), payload.addresses)
+        assertEquals(listOf("192.0.2.63"), payload.addresses)
     }
 
     @Test
@@ -74,7 +74,7 @@ class QrPayloadParserTest {
         val payload = (result as QrParseResult.Success).payload
 
         // 主路径仍是局域网地址，热点地址不混进来
-        assertEquals(listOf("172.18.15.63"), payload.addresses)
+        assertEquals(listOf("192.0.2.63"), payload.addresses)
         assertEquals("WirelessCable-7F2A", payload.hotspot?.ssid)
         assertEquals("12345678", payload.hotspot?.passphrase)
         assertEquals("192.168.137.1", payload.hotspot?.address)
@@ -199,9 +199,9 @@ class QrPayloadParserTest {
         assertTrue(result is QrParseResult.Success)
 
         val server = QrPayloadParser.toDiscoveredServer((result as QrParseResult.Success).payload)
-        assertEquals("172.18.15.63", server.host)
+        assertEquals("192.0.2.63", server.host)
         assertEquals(47110, server.port)
         assertEquals("客厅电脑", server.displayName)
-        assertEquals(listOf("172.18.15.63"), server.candidates)
+        assertEquals(listOf("192.0.2.63"), server.candidates)
     }
 }

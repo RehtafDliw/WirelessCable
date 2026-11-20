@@ -548,7 +548,16 @@ public sealed class TransferEngineTests : IAsyncLifetime
         Assert.Equal(1, result.Value!.Deleted);
         Assert.Equal(0, result.Value.FilesDeleted);
         Assert.True(File.Exists(ReceivePath("keep-me.bin")));
-        Assert.Null(await _repository.GetAsync(task.TaskId));
+
+        // 删除只作用于**本端**：手机删了，电脑端照旧看得见
+        var record = await _repository.GetAsync(task.TaskId);
+        Assert.NotNull(record);
+        Assert.Equal(_device.DeviceId, record!.HiddenForDevice);
+        Assert.Equal(0, record.DesktopHidden);
+        Assert.DoesNotContain(
+            await _repository.ListForDeviceAsync(_device.DeviceId, 100), x => x.TaskId == task.TaskId);
+        Assert.Contains(
+            await _repository.ListRecentAsync(100), x => x.TaskId == task.TaskId);
     }
 
     [Fact]
@@ -565,20 +574,78 @@ public sealed class TransferEngineTests : IAsyncLifetime
         Assert.Equal(1, result.Value!.Deleted);
         Assert.Equal(1, result.Value.FilesDeleted);
         Assert.False(File.Exists(ReceivePath("drop-me.bin")));
-        Assert.Null(await _repository.GetAsync(task.TaskId));
+
+        // 文件删了，但记录只对本端隐藏（另一端的列表不受影响）
+        var record = await _repository.GetAsync(task.TaskId);
+        Assert.NotNull(record);
+        Assert.Equal(_device.DeviceId, record!.HiddenForDevice);
     }
 
     [Fact]
-    public async Task DeleteRecords_RefusesTaskStillTransferring()
+    public async Task DeleteRecords_CancelsTaskStillTransferring()
     {
-        var task = await CreateUploadAsync(RandomBytes(4096), "busy.bin");
+        var content = RandomBytes(192 * 1024);
+        // 切成 3 块、只写第一块 —— 任务停在"传输中"，临时文件已经预分配
+        // （最小块 64 KiB，见 ProtocolConstants.MinChunkSizeBytes）
+        var task = await CreateUploadAsync(content, "busy.bin", requestedChunkSize: 64 * 1024);
 
+        using (var first = new MemoryStream(content, 0, 64 * 1024))
+        {
+            var written = await _engine.WriteChunkAsync(
+                _device, task.TaskId, 0, first, 64 * 1024,
+                Sha256(content.Take(64 * 1024).ToArray()));
+            Assert.True(written.Success, written.Error?.Message);
+        }
+
+        var before = await _repository.GetAsync(task.TaskId);
+        Assert.NotNull(before);
+        Assert.Equal(TransferStates.Transferring, before!.Status);
+        var tempPath = before.TempPath;
+        Assert.False(string.IsNullOrEmpty(tempPath));
+
+        // **传输中的不给删记录**（需求 4）：只有「取消传输」能停它。
+        // 删记录是"清理历史"，不该顺手把正在传的这条也终止掉。
         var result = await _engine.DeleteRecordsAsync(_device, [task.TaskId], deleteFiles: false);
 
         Assert.True(result.Success, result.Error?.Message);
         Assert.Equal(0, result.Value!.Deleted);
         Assert.Single(result.Value.Rejected);
-        Assert.NotNull(await _repository.GetAsync(task.TaskId));
+
+        // 任务原样还在：还在传，临时文件也还在
+        var after = await _repository.GetAsync(task.TaskId);
+        Assert.NotNull(after);
+        Assert.Equal(TransferStates.Transferring, after!.Status);
+        Assert.True(File.Exists(tempPath), "传输中的任务不该被删除动过");
+    }
+
+    [Fact]
+    public async Task Cancel_MarksRecordDeletedOnBothSides()
+    {
+        // 需求 2：**取消是双向的**——另一方也要取消、也要删掉这条记录。
+        // 实现是两端都打上"已删"标记（hidden_for_device + desktop_hidden），
+        // 于是两边的列表都查不到它，之后再由 PurgeHiddenAsync 回收行。
+        var content = RandomBytes(4096);
+        var task = await CreateUploadAsync(content, "cancel-both.bin");
+
+        var cancelled = await _engine.CancelAsync(_device, task.TaskId);
+        Assert.True(cancelled.Success, cancelled.Error?.Message);
+
+        var record = await _repository.GetAsync(task.TaskId);
+        Assert.NotNull(record);
+        Assert.Equal(TransferStates.Cancelled, record!.Status);
+
+        // **不隐藏这一行**：状态 cancelled 本身就是"双方都看到取消"的事实，
+        // 两端列表按 cancelled 过滤，手机端再把本地记录清掉。
+        // 提前隐藏反而让客户端无从得知这条被取消了（手机端列表里没有它，
+        // 就没法判断"是对方删了"还是"只是没在列表里"）。
+        Assert.Null(record.HiddenForDevice);
+        Assert.Equal(0, record.DesktopHidden);
+
+        // 两端都能从列表接口拿到它，客户端据此清理自己的记录
+        Assert.Contains(
+            await _repository.ListForDeviceAsync(_device.DeviceId, 100), x => x.TaskId == task.TaskId);
+        Assert.Contains(
+            await _repository.ListRecentAsync(100), x => x.TaskId == task.TaskId);
     }
 
     [Fact]
@@ -788,6 +855,37 @@ public sealed class TransferEngineTests : IAsyncLifetime
         Assert.True(result.Success, result.Error?.Message);
         Assert.Equal(1, result.Value!.Deleted);
         Assert.Empty(result.Value.Rejected);
+
+        // 宿主界面（没有 device）删的是自己那一端：行保留，只打桌面标记
+        var record = await _repository.GetAsync(task.TaskId);
+        Assert.NotNull(record);
+        Assert.Equal(1, record!.DesktopHidden);
+        Assert.Null(record.HiddenForDevice);
+        Assert.DoesNotContain(
+            await _repository.ListRecentAsync(100), x => x.TaskId == task.TaskId);
+    }
+
+    [Fact]
+    public async Task DeleteRecords_BothScopesRemoved_DeletesTheRow()
+    {
+        // 删除对每一端都是即时生效的（各删各的），"行还在不在"只是垃圾回收：
+        // 两端都删过之后，这一行没有任何人看得见，清掉省磁盘。
+        var content = RandomBytes(2048);
+        var task = await CreateUploadAsync(content, "both.bin");
+        await WriteAllChunksAsync(task, content);
+        await CompleteAsync(task.TaskId, Sha256(content));
+
+        var desktop = await _engine.DeleteRecordsAsync([task.TaskId], deleteFiles: false);
+        Assert.True(desktop.Success, desktop.Error?.Message);
+
+        // 电脑删过之后，手机端仍然看得到这一条
+        Assert.Contains(
+            await _repository.ListForDeviceAsync(_device.DeviceId, 100), x => x.TaskId == task.TaskId);
+
+        var phone = await _engine.DeleteRecordsAsync(_device, [task.TaskId], deleteFiles: false);
+        Assert.True(phone.Success, phone.Error?.Message);
+
+        // 两端都删过：这条已经没人看得见，物理行被回收
         Assert.Null(await _repository.GetAsync(task.TaskId));
     }
 
@@ -1402,7 +1500,9 @@ public sealed class TransferEngineTests : IAsyncLifetime
                 Sha256(content[task.ChunkSize..(task.ChunkSize * 2)]));
 
             Assert.False(rejected.Success);
-            Assert.Equal(ErrorCodes.TransferStateInvalid, rejected.Error!.Code);
+            // 2.10.15 起暂停用独立错误码：手机端要据此保留已落盘的文件，
+            // 而不是当成失败把目标文件删掉（transfer_state_invalid 会走删文件分支）
+            Assert.Equal(ErrorCodes.TransferPaused, rejected.Error!.Code);
             Assert.True(rejected.Error.Retryable, "暂停应标为可重试，避免客户端判失败");
         }
 
@@ -1434,6 +1534,125 @@ public sealed class TransferEngineTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task WriteChunk_RespectsPausedWhenUploadSessionIsLost()
+    {
+        // 内存里没有上传会话时重建，**必须尊重数据库里的 paused**。
+        // 以前重建时硬写 transferring/preparing，于是"先暂停、再开始推"的窗口里
+        // 手机推块被照单全收——电脑那边明明按了暂停，文件还在往上传（真机：
+        // "电脑拉手机的文件还是停不住"）。会话不在内存是常事：手机重连、电脑重启、
+        // 上传被中断过一次。
+        var content = RandomBytes(4096);
+        var task = await CreateUploadAsync(content, "paused-upload.bin");
+
+        // 取消一次，把内存会话释放掉（模拟进程重启）
+        var cancelled = await _engine.CancelAsync(_device, task.TaskId);
+        Assert.True(cancelled.Success, cancelled.Error?.Message);
+
+        // 再把数据库状态置成 paused：等于"暂停之后进程重启了"
+        await _repository.TouchAsync(task.TaskId, TransferStates.Paused, DateTimeOffset.UtcNow);
+
+        using var body = new MemoryStream(content, 0, content.Length);
+        var written = await _engine.WriteChunkAsync(
+            _device, task.TaskId, 0, body, content.Length, Sha256(content));
+
+        Assert.False(written.Success);
+        Assert.Equal(ErrorCodes.TransferPaused, written.Error!.Code);
+    }
+
+    [Fact]
+    public async Task DeleteRecords_PausedTask_EndsTheTransfer()
+    {
+        // 暂停中的任务被删掉记录时，状态必须变成 cancelled。
+        // 以前只终结"还在跑"的，暂停中的删完仍是 paused——对方点「继续」会被真的恢复，
+        // 而记录早已被删掉、文件没人收（真机：提示"已继续传输"，实际任务已经没了）。
+        var content = RandomBytes(4096);
+        var task = await CreateUploadAsync(content, "paused-del.bin");
+
+        var paused = await _engine.PauseAsync(_device, task.TaskId);
+        Assert.True(paused.Success, paused.Error?.Message);
+
+        var deleted = await _engine.DeleteRecordsAsync(_device, [task.TaskId], deleteFiles: false);
+        Assert.True(deleted.Success, deleted.Error?.Message);
+        Assert.Equal(1, deleted.Value!.Cancelled);
+
+        var record = await _repository.GetAsync(task.TaskId);
+        Assert.NotNull(record);
+        Assert.Equal(TransferStates.Cancelled, record!.Status);
+
+        // 对方点继续：必须说"已被取消"，不能把它恢复回去
+        var resumed = await _engine.ResumeAsync(_device, task.TaskId);
+        Assert.False(resumed.Success);
+        Assert.Equal(ErrorCodes.TransferCancelled, resumed.Error!.Code);
+    }
+
+    [Fact]
+    public async Task CancelBatch_CompletesTheWholeBatchAcrossDirectories()
+    {
+        // 「取消一批」必须覆盖**同批的每一个任务**，哪怕它们在不同的目录下。
+        //
+        // 以前补全是按**落点目录**做的：上传方向（手机 → 电脑）的一批文件可能
+        // 各自在不同的子目录（手机里选了整个 Music，里面是很多子目录），
+        // 按目录补全只对"同一目录"有效 → 跨目录的那几条漏网，
+        // 状态还是 transferring，电脑端「传输中」角标一直亮着（真机）。
+        var content = RandomBytes(1024);
+
+        var a = await CreateUploadAsync(content, "a.bin", "AlbumA", batchName: "整批");
+        var b = await CreateUploadAsync(content, "b.bin", "AlbumB", batchName: "整批");
+        var c = await CreateUploadAsync(content, "c.bin", "AlbumC", batchName: "整批");
+
+        // 只取消其中一个（用户只点了那一行）
+        var cancelled = await _engine.CancelBatchAsync(_device, [a.TaskId], deleteFiles: false);
+        Assert.True(cancelled.Success, cancelled.Error?.Message);
+
+        foreach (var id in new[] { a.TaskId, b.TaskId, c.TaskId })
+        {
+            var record = await _repository.GetAsync(id);
+            Assert.NotNull(record);
+            Assert.Equal(TransferStates.Cancelled, record!.Status);
+        }
+    }
+
+    [Fact]
+    public async Task CancelBatch_KeepsOtherBatchesUntouched()
+    {
+        // 补全不能**过头**：另一批的文件不该被一起取消。
+        // 批次名是唯一的批次标识，目录补全只是兜底。
+        var content = RandomBytes(1024);
+
+        var mine = await CreateUploadAsync(content, "mine.bin", "AlbumA", batchName: "我这一批");
+        var other = await CreateUploadAsync(content, "other.bin", "AlbumA", batchName: "别人那一批");
+
+        var cancelled = await _engine.CancelBatchAsync(_device, [mine.TaskId], deleteFiles: false);
+        Assert.True(cancelled.Success, cancelled.Error?.Message);
+
+        var mineRecord = await _repository.GetAsync(mine.TaskId);
+        Assert.Equal(TransferStates.Cancelled, mineRecord!.Status);
+
+        // 同一目录、但不同批次：**不能**被一起取消。
+        // 补全优先按批次名，目录只作为"没有批次名"时的兜底 ——
+        // 两条都用的话，取消 A 批会把 B 批也清掉（误伤）。
+        var otherRecord = await _repository.GetAsync(other.TaskId);
+        Assert.NotNull(otherRecord);
+        Assert.NotEqual(TransferStates.Cancelled, otherRecord!.Status);
+    }
+
+    [Fact]
+    public async Task Resume_CancelledTask_ReportsCancelledByPeer()
+    {
+        // 另一端删了这条正在传的任务（删除会先暂停再取消）。本端点「继续」时
+        // 必须说清"已被接收方取消"，而不是含糊的"任务已结束"或假装成功。
+        var task = await CreateUploadAsync(RandomBytes(4096), "gone.bin");
+
+        var cancelled = await _engine.CancelAsync(_device, task.TaskId);
+        Assert.True(cancelled.Success, cancelled.Error?.Message);
+
+        var resumed = await _engine.ResumeAsync(_device, task.TaskId);
+
+        Assert.False(resumed.Success);
+        Assert.Equal(ErrorCodes.TransferCancelled, resumed.Error!.Code);
+    }
+
+    [Fact]
     public async Task Pause_IsIdempotent()
     {
         var content = RandomBytes(128 * 1024);
@@ -1452,7 +1671,8 @@ public sealed class TransferEngineTests : IAsyncLifetime
         byte[] content,
         string fileName,
         string? relativeDirectory = null,
-        int? requestedChunkSize = null)
+        int? requestedChunkSize = null,
+        string? batchName = null)
     {
         var result = await _engine.CreateUploadAsync(_device, new TransferStartRequestDto
         {
@@ -1461,6 +1681,7 @@ public sealed class TransferEngineTests : IAsyncLifetime
             TotalBytes = content.Length,
             Sha256 = Sha256(content),
             RequestedChunkSize = requestedChunkSize,
+            BatchName = batchName,
         });
 
         Assert.True(result.Success, result.Error?.Message);

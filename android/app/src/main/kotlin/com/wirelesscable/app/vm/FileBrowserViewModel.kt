@@ -820,7 +820,9 @@ class FileBrowserViewModel(
 
         viewModelScope.launch {
             val api = ensureApi() ?: return@launch
-            _state.update { it.copy(busy = true, message = null) }
+            // 展开要递归列目录 + 逐条建任务，几千个文件要 4–10 秒（真机实测）。
+            // 这段时间必须有明确提示，否则用户以为点了没反应、再点一次就排两批。
+            _state.update { it.copy(busy = true, message = "正在准备「${entry.name}」…") }
 
             when (val outcome = api.downloadFolder(tokenOf(), rootId, entry.relativePath)) {
                 is ApiOutcome.Success -> {

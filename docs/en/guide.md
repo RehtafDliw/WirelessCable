@@ -70,6 +70,8 @@ In Gallery, Files or a browser tap **Share** → **WirelessCable**. A picker app
 - tap **Direct transfer** → a QR page opens, another phone scans it and receives the files
   (phone-to-phone, no PC involved);
 - tap **Cancel** → nothing is sent.
+- the desktop sidebar has **Get the phone app**: the phone's browser can download and install the
+  APK straight from the PC (it warns about the self-signed certificate — click through it).
 
 Sharing a web link works too: it is saved as a small text file and sent.
 
@@ -99,8 +101,23 @@ The only exceptions are other apps' `Android/data` and `Android/obb`, which Andr
 Both the PC's **Transfers** page and the phone's **Transfers** tab show progress.
 
 - Pause, then resume — it continues where it stopped, it does not restart.
+- **Pause works from either end**: both sides act on the same server state, so the other end stops
+  after at most the chunk in flight (8 MB).
+- If the other device cancelled the task, the row **disappears from your list** (cancelling is
+  symmetric) and the local copy is dropped too. Should you happen to hit Resume in the very same
+  instant, you get a **"Cancelled by the other device"** prompt asking whether to delete the local
+  record — resuming would move no data.
 - Cancel discards the task.
 - Finished records can be removed (this deletes the record, not the file).
+- **Cancelling is symmetric**: whichever side cancels, the other side stops too, and the record
+  disappears on both ends. You cancel the **whole batch** — even when its files sit in different
+  subfolders, they all go, nothing is left still transferring. The files that already finished are swept away as well — you cancelled
+  the batch, so the other end should not keep listing them under "Finished". Tick "also delete the
+  files" and the files go too.
+- A transfer that is still running offers only **Cancel**, never **Delete record** — tidy up the
+  history after the transfer finishes (or after you cancel it). On the phone the bottom action bar
+  simply omits **Delete** while every selected row is still in flight.
+- **Deleting a record is per-device**: your history is yours; the other end keeps its own copy.
 
 ---
 
@@ -109,10 +126,16 @@ Both the PC's **Transfers** page and the phone's **Transfers** tab show progress
 | I want to… | Where |
 | --- | --- |
 | change where received files go | PC **Settings → Receive folder** |
-| transfer with no Wi-Fi on the phone | the PC opens a fallback hotspot when generating the pairing QR; name and password appear under the QR code |
+| transfer with no Wi-Fi on the phone | tick **Use a hotspot** when generating the pairing QR; the name and password appear under the QR code (off by default, see below) |
 | switch light/dark | PC **Settings → Appearance**; phone **Settings → Appearance** |
 | change the UI language | phone **Settings → Appearance → Language** (System / 中文 / English); on the PC use the **English / 中文** button at the bottom of the sidebar |
 | keep it running in the tray after closing | tray icon → **Classic UI** → Settings → "Close to tray" |
+
+> The hotspot is **off by default**: when the PC reaches the internet over Wi-Fi and its adapter
+> does not support STA+AP concurrency, starting one knocks the PC itself offline. You only need it
+> when the phone and the PC are not on the same network — tick the box and regenerate the QR code.
+> Unticking it stops the hotspot the app started; a hotspot you enabled yourself in Windows is left
+> alone.
 
 ---
 
@@ -124,8 +147,9 @@ Both the PC's **Transfers** page and the phone's **Transfers** tab show progress
    Only two things really separate devices: the router's **guest network**, and **AP isolation /
    wireless isolation**.
 2. Is the PC's firewall blocking it? Approve the elevation prompt on first launch.
-3. Did the PC change networks or reboot? Tap **Reconnect** on the phone's home screen; if that fails,
-   scan the QR code again.
+3. Did the PC change networks or reboot? Tap **Reconnect** on the phone's home screen — it
+   re-discovers the PC over mDNS and follows it to the new address. If that fails, scan the QR code
+   again. mDNS may need a few seconds after a network switch, so retry once before rescanning.
 
 **The PC can't see files on the phone**
 

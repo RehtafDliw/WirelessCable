@@ -41,7 +41,19 @@ private const val REPORT_INTERVAL_MS = 150L
 
 /** 两次服务端列表请求的最小间隔（多方轮询共用一次真实请求）。 */
 private const val MIN_REFRESH_INTERVAL_MS = 1_500L
+
+/**
+ * 服务端列表里已经查不到的本地条目，最多保留多久（毫秒）。
+ *
+ * 对方取消/删除记录后，服务端会把两端都标记成"已删"，这条就不在列表里了。
+ * 本地跟着清掉，手机端才不会挂着一批"对方已经取消"的行。
+ * 半分钟是给"接口只返回最近 N 条、其余被截断"留的余量。
+ */
+private const val STALE_CLEANUP_MS = 30_000L
 private const val MAX_CHUNK_ATTEMPTS = 3
+
+/** 点「继续」后给服务端状态的追赶时间（见 [TransferEngine.resumeGraceUntilMs]）。 */
+private const val RESUME_GRACE_MS = 10_000L
 private val HEX_CHARS = "0123456789abcdef".toCharArray()
 
 /** 一条传输任务在手机上需要展示与恢复的全部信息。 */
@@ -71,6 +83,10 @@ data class TransferItem(
     val relativePath: String = "",
     /** 批次文件夹名。 */
     val batchName: String? = null,
+    /** 本批共多少个文件（电脑下发）；0 = 未知，界面退回按已见条目数显示。 */
+    val batchTotal: Int = 0,
+    /** 本批所有文件的总字节数（电脑下发）；0 = 未知。进度条的分母。 */
+    val batchTotalBytes: Long = 0L,
 ) {
     val isActive: Boolean get() = TransferStates.isActive(state)
     val isUpload: Boolean get() = direction == TransferDirections.UPLOAD
@@ -182,7 +198,8 @@ class TransferEngine(
 
         item ?: return "传输任务不存在或尚未同步"
 
-        return when (val result = saveDownload(item, destination)) {
+        // 作业下发是自动流程：服务端若处于暂停，拉块会被 409 拒绝，不要顺手 resume
+        return when (val result = saveDownload(item, destination, allowResume = false)) {
             is TransferResult.Ok -> null
             is TransferResult.Failed -> result.message
             is TransferResult.Interrupted -> "传输已中断，稍后会自动续传"
@@ -206,6 +223,22 @@ class TransferEngine(
         /** 覆盖显示名：传应用时用应用名，否则对面只会看到 base.apk。 */
         displayName: String? = null,
         onTaskCreated: (String) -> Unit = {},
+        /**
+         * 本批共多少个文件（电脑整文件夹拉取时随作业下发）。
+         *
+         * 手机是逐条执行作业的，天生不知道整批有多少个；没有这个数，
+         * 列表只能显示"已经建出来几条"，看起来就是进度 100% 还在传、数量一直在加。
+         */
+        batchTotal: Int = 0,
+        /** 本批对应的文件夹名（显示用）。 */
+        batchName: String? = null,
+        /**
+         * 本批所有文件的总字节数。
+         *
+         * 进度条的分母：传输任务是逐条建出来的，用"已见任务总大小"当分母
+         * 会随着任务创建越来越大，进度看着就往回跳。
+         */
+        batchTotalBytes: Long = 0L,
     ): TransferResult {
         val source = SafSource(resolver, uri, displayName)
 
@@ -240,6 +273,10 @@ class TransferEngine(
                 conflict = TransferConflictPolicies.RENAME,
                 directoryId = directoryId,
                 relativeDirectory = relativeDirectory?.takeIf { it.isNotBlank() },
+                // 批次名：服务端靠它把"取消一批"补全到同批的每一个任务。
+                // 不传的话，上传方向的一批文件（各自在不同目录）取消时会漏，
+                // 漏掉的那条还在 transferring，电脑端「传输中」角标一直亮着（真机）。
+                batchName = batchName?.takeIf { it.isNotBlank() },
             ),
         )
 
@@ -278,6 +315,14 @@ class TransferEngine(
                 chunkCount = task.chunkCount,
                 state = TransferStates.PREPARING,
                 updatedAt = System.currentTimeMillis(),
+                // 分组键必须跟着建：这条乐观条目会一直留在列表里（后续刷新只做 merge），
+                // 不补的话整文件夹上传在手机端永远是一条一条——服务端明明给了路径，
+                // 本地这份是空的，合并时又被旧值占着。
+                relativePath = task.relativePath,
+                batchId = task.batchId,
+                batchName = batchName ?: task.batchName,
+                batchTotal = batchTotal,
+                batchTotalBytes = batchTotalBytes,
             ),
         )
 
@@ -294,6 +339,15 @@ class TransferEngine(
     private val pausedTasks = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     /**
+     * 刚点过「继续」的任务，在这之前不接受服务端"暂停"快照。
+     *
+     * 恢复请求发出到服务端真正变 transferring 之间有几十到几百毫秒，这期间
+     * 列表里拿到的还是 paused；如果不放行，`merge` 会把暂停标记又灌回去，
+     * 用户点完「继续」闪一下就又被暂停。
+     */
+    private val resumeGraceUntilMs = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    /**
      * 用户主动取消的任务。
      *
      * 只有登记过的，取消协程时才回发 `cancel` 把电脑上的任务一起停掉；
@@ -301,6 +355,43 @@ class TransferEngine(
      * 真机踩过：手机点发送的同时，电脑发来的 1.45 GB 下载被判成"用户取消"。
      */
     private val userCancels = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * **被另一端取消**的任务。
+     *
+     * 对方取消（电脑点取消、或电脑删掉了这条记录）之后，这条在本机就没有意义了：
+     * 记录要删掉、半成品要清、整批泵要停下。留着的话手机列表里会挂着一批
+     * "已取消"的行，泵还会一个个去试、每个都失败（真机：电脑取消作业后手机还能看到）。
+     *
+     * 本端自己取消的不进这个集合——那是用户自己的操作痕迹，要留在「已完成」里。
+     */
+    private val cancelledByPeer = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * 对方取消后、**已经落到手机上的文件**（下载方向）。
+     *
+     * 取消的语义是"这条传输到此为止，两端都清掉记录和数据"。
+     * 半成品（`.wcpart`）在 merge 里直接删；已经改名成正式文件的那个，
+     * 引擎没有 SAF 权限，交给界面层删——所以这里把落点记下来交出去。
+     */
+    private val cancelledSavedUris = java.util.concurrent.ConcurrentLinkedQueue<String>()
+
+    /** 这个任务是不是被另一端取消的（泵据此整批停下）。 */
+    fun isCancelledByPeer(taskId: String): Boolean = taskId in cancelledByPeer
+
+    /**
+     * 取出"对方取消后要删掉的文件落点"，取走即清空。
+     * 界面层拿到后用 SAF 删掉（引擎自己没有权限动用户目录）。
+     */
+    fun drainCancelledSavedUris(): List<String> {
+        if (cancelledSavedUris.isEmpty()) {
+            return emptyList()
+        }
+
+        val all = cancelledSavedUris.toList()
+        cancelledSavedUris.clear()
+        return all
+    }
 
     /** 界面点「取消任务」时先登记，再取消协程。 */
     fun markUserCancelled(taskId: String) {
@@ -345,13 +436,43 @@ class TransferEngine(
         }
     }
 
-    suspend fun resumeUpload(taskId: String): TransferResult {
+    /**
+     * 停/放某个落点目录下还没执行的作业。
+     *
+     * 整文件夹传输是逐个下发、逐个执行的，队列里剩下的那些**还没有传输任务**，
+     * 只按 taskId 暂停等于什么都没停（用户会看到"按了暂停还在传"）。
+     * 作业进 paused 后手机不再取走；恢复时改回 pending 自动续上。
+     */
+    suspend fun controlQueuedJobs(directory: String?, action: String) {
+        if (directory.isNullOrBlank()) return
+        runCatching { api.controlJobs(token, directory, action) }
+    }
+
+    /**
+     * 续传一条上传任务。
+     *
+     * [allowResume] 与 [saveDownload] 同义：自动流程传 false，
+     * 否则每续一个文件就把服务端刚设的 paused 改回活跃，暂停根本按不住。
+     */
+    suspend fun resumeUpload(taskId: String, allowResume: Boolean = true): TransferResult {
         val entity = db.transferDao().get(taskId)
             ?: return TransferResult.Failed(TransferErrorCodes.TRANSFER_NOT_FOUND, "本地记录已不存在")
         val uriString = entity.sourceUri
             ?: return TransferResult.Failed(TransferErrorCodes.FILE_INACCESSIBLE, "缺少源文件授权，无法续传")
         val wholeSha = entity.declaredSha256
             ?: return TransferResult.Failed(TransferErrorCodes.FILE_INACCESSIBLE, "缺少文件校验信息，无法续传")
+
+        // 恢复时先清暂停标记，否则 runUpload 在第一块就自我暂停
+        // （saveDownload 一直有这一步，上传这边漏了：点「继续」会闪一下就回暂停）
+        pausedTasks.remove(taskId)
+        resumeGraceUntilMs[taskId] = SystemClock.elapsedRealtime() + RESUME_GRACE_MS
+
+        if (!allowResume) {
+            // 自动续传：不改服务端状态。若是 paused，推块会被 409 拒绝，
+            // 传输循环自己会停在 paused——这正是我们要的。
+            mirrorServerChunks(taskId)
+            return runUpload(taskId, Uri.parse(uriString), entity.totalBytes, wholeSha)
+        }
 
         // 服务端的位图是唯一事实来源；任务在服务端被回收了就如实失败
         return when (val resumed = api.resume(token, taskId)) {
@@ -385,6 +506,16 @@ class TransferEngine(
 
         try {
             for (chunk in pending) {
+                // 暂停要能刹住：每块之前看一次标记。
+                // 下载那条路（pullPendingChunks）一直有这一步，上传漏了 ——
+                // 于是电脑点「暂停」后，手机还在一个块一个块地往上发，
+                // 服务端返回"状态不对"时下面的自动 resume 还把它重新拉起来，
+                // 用户看到的就是"暂停刹不住车"。
+                if (pausedTasks.remove(taskId)) {
+                    withContext(NonCancellable) { updateState(taskId, TransferStates.PAUSED) }
+                    return TransferResult.Cancelled
+                }
+
                 var attempt = 0
                 while (true) {
                     attempt++
@@ -397,13 +528,16 @@ class TransferEngine(
                             return interrupt(taskId, bodyResult.message)
 
                         is ChunkAttempt.Fatal -> {
-                            // 任务在服务端被回收（保留期已过）：尝试恢复一次再重试本块
-                            if (bodyResult.code == TransferErrorCodes.TRANSFER_STATE_INVALID && attempt == 1) {
-                                when (api.resume(token, taskId)) {
-                                    is ApiOutcome.Success -> continue
-                                    is ApiOutcome.Failure -> Unit
+                            // 服务端说"已暂停"：这不是错误，别标失败，等用户继续。
+                            if (bodyResult.code == TransferErrorCodes.TRANSFER_PAUSED) {
+                                withContext(NonCancellable) {
+                                    updateState(taskId, TransferStates.PAUSED)
                                 }
+                                return TransferResult.Cancelled
                             }
+
+                            // 其余 409 也**不再自动 resume**：自动拉起会把用户的暂停直接破掉
+                            // （真机"暂停刹不住车"的帮凶）。任务真被回收时如实失败，重试即可。
 
                             if ((bodyResult.code == TransferErrorCodes.CHUNK_CHECKSUM_MISMATCH ||
                                     bodyResult.code == TransferErrorCodes.CHUNK_IN_FLIGHT) &&
@@ -483,15 +617,26 @@ class TransferEngine(
      * 先写应用私有临时文件（预分配、按偏移写块、逐块回执），整文件校验通过才复制到落点。
      * [destination] 为 null 表示沿用 Room 里已存的落点（自动恢复场景）。
      */
+    /**
+     * 把一条下载任务拉到 [destination]。
+     *
+     * [allowResume] 决定"要不要顺手把服务端状态改回活跃"。
+     * **自动流程（整批泵、收件箱、作业下发）必须传 false**：`api.resume` 对 paused
+     * 是成功的，会把它改回 preparing/transferring——泵每开始一个文件就解一次暂停，
+     * 于是电脑那边按了暂停、手机这边一个文件接一个文件地拉（真机"停不住"的根）。
+     * 只有用户真的点了「继续」（[TransferViewModel.startRestore]）才允许恢复。
+     */
     suspend fun saveDownload(
         item: TransferItem,
         destination: Uri?,
         onTaskCreated: (String) -> Unit = {},
+        allowResume: Boolean = true,
     ): TransferResult {
         onTaskCreated(item.taskId)
 
         // 恢复时要清掉上一次的暂停标记，否则新的循环在第一块就自我暂停
         pausedTasks.remove(item.taskId)
+        resumeGraceUntilMs[item.taskId] = SystemClock.elapsedRealtime() + RESUME_GRACE_MS
 
         var entity = db.transferDao().get(item.taskId)
         val destinationUri = destination?.toString() ?: entity?.destinationUri
@@ -507,7 +652,7 @@ class TransferEngine(
                     db.transferChunkDao().resetAll(item.taskId, System.currentTimeMillis())
                 }
             }
-        } else if (item.state != TransferStates.WAITING) {
+        } else if (allowResume && item.state != TransferStates.WAITING) {
             // 中断恢复：以服务端状态为准；任务已在服务端终结就如实上报
             when (val resumed = api.resume(token, item.taskId)) {
                 is ApiOutcome.Failure -> return TransferResult.Failed(resumed.code, resumed.message)
@@ -580,6 +725,13 @@ class TransferEngine(
 
         return when (val ack = api.acknowledge(token, item.taskId, wholeSha)) {
             is ApiOutcome.Failure -> {
+                // 服务端说"任务已暂停"：文件已经完整落盘，**不能删**，任务标暂停等用户继续。
+                // 以前一律走下面的 deleteDestination + fail：暂停一下，刚传完的文件反而没了。
+                if (ack.code == TransferErrorCodes.TRANSFER_PAUSED) {
+                    withContext(NonCancellable) { updateState(item.taskId, TransferStates.PAUSED) }
+                    return TransferResult.Cancelled
+                }
+
                 deleteDestination(target)
                 if (ack.code == NetworkErrorCodes.CONNECT_FAILED || ack.code == NetworkErrorCodes.TIMEOUT) {
                     interrupt(item.taskId, ack.message)
@@ -707,6 +859,13 @@ class TransferEngine(
                             }
 
                             outcome is ApiOutcome.Failure -> {
+                                // 服务端已暂停：不是错误，保留临时文件，等用户继续
+                                if (outcome.code == TransferErrorCodes.TRANSFER_PAUSED) {
+                                    withContext(NonCancellable) {
+                                        updateState(item.taskId, TransferStates.PAUSED)
+                                    }
+                                    return TransferResult.Cancelled
+                                }
                                 return networkOrFail(item.taskId, outcome)
                             }
 
@@ -739,6 +898,12 @@ class TransferEngine(
                                     }
 
                                     is ApiOutcome.Failure -> {
+                                        if (ack.code == TransferErrorCodes.TRANSFER_PAUSED) {
+                                            withContext(NonCancellable) {
+                                                updateState(item.taskId, TransferStates.PAUSED)
+                                            }
+                                            return TransferResult.Cancelled
+                                        }
                                         if (ack.code == TransferErrorCodes.CHUNK_CHECKSUM_MISMATCH &&
                                             attempt < MAX_CHUNK_ATTEMPTS
                                         ) {
@@ -826,6 +991,35 @@ class TransferEngine(
      * 本地清理（删半截文件、删分块位图、删记录）必须逐个做——
      * 那是本机的事，跟服务端一次请求没关系。
      */
+    /**
+     * 用户显式点「继续」：让服务端把这些任务从 paused 恢复成活跃。
+     *
+     * 泵是自动流程，它不碰服务端状态（见 [saveDownload] 的 `allowResume`），
+     * 所以"恢复"这个动作必须由这里显式发出去。少了这一步，
+     * 用户点「继续」后泵虽然重新跑起来了，服务端还是 paused，
+     * 第一块就被 409 顶回来——恢复不了（2.10.34 引入的现象）。
+     *
+     * 返回 null 表示成功，否则是给用户看的提示。
+     */
+    suspend fun resumeBatch(taskIds: Collection<String>): String? {
+        val ids = taskIds.distinct()
+        if (ids.isEmpty()) {
+            return null
+        }
+
+        return when (val outcome = api.batchAction(token, ids, "resume")) {
+            is ApiOutcome.Failure -> outcome.message
+
+            is ApiOutcome.Success -> {
+                ids.forEach { id ->
+                    pausedTasks.remove(id)
+                    resumeGraceUntilMs[id] = SystemClock.elapsedRealtime() + RESUME_GRACE_MS
+                }
+                null
+            }
+        }
+    }
+
     suspend fun cancelAll(taskIds: Collection<String>) {
         val ids = taskIds.distinct()
         if (ids.isEmpty()) {
@@ -841,6 +1035,23 @@ class TransferEngine(
             db.transferDao().delete(id)
             cancelLocal(id)
         }
+    }
+
+    /**
+     * 删除前先把这批停住：**暂停 → 取消 → 删半成品**。
+     *
+     * 暂停让传输循环在下一块之前就停手（只置 cancelled 的话，在途的那一块还会写完）；
+     * 取消让服务端清临时文件与分块位图；本地再删 `.wcpart`、位图与记录。
+     * 用户点的是「删除」，不该被"请先取消"挡回来、让他做两遍。
+     */
+    suspend fun stopForDelete(taskIds: Collection<String>) {
+        val ids = taskIds.distinct()
+        if (ids.isEmpty()) {
+            return
+        }
+
+        runCatching { api.batchAction(token, ids, "pause") }
+        cancelAll(ids)
     }
 
     // ------------------------------------------------------------ 恢复辅助
@@ -1063,7 +1274,11 @@ class TransferEngine(
 
     // ------------------------------------------------------------ 状态与持久化
 
-    private fun merge(remote: List<TransferTask>) {
+    private suspend fun merge(remote: List<TransferTask>) {
+        // 对方取消的：本地记录要删。Room 的 delete 是挂起函数，不能在 update 的
+        // 同步块里调，所以先收集、update 之后统一删。
+        val toDelete = mutableListOf<String>()
+
         _items.update { current ->
             // 服务端已经删掉的记录必须从本地消失：
             // 以前只往里加不往外删，于是"删了记录还在"（1.5.2 修）。
@@ -1074,8 +1289,97 @@ class TransferEngine(
                 .associateBy { it.taskId }
                 .toMutableMap()
 
+            // 被另一端取消的：这一轮要从列表里去掉（对方已经把这条传输作废了）
+            val dropped = mutableSetOf<String>()
+
+            // **服务端列表里没有的本地条目**：要么被截断（接口只给最近 N 条），要么真被删了。
+            // 对方取消时服务端会把两端都标记成"已删"，这条就不在列表里了——
+            // 本地必须跟着删，否则手机列表里挂着一批"对方已经取消"的行（真机：
+            // 电脑取消作业后手机还能看到）。
+            //
+            // 判据：比服务端返回的最老一条还旧 → 是截断，保留；
+            // 其余（已结束的、或已经很久没动静的）→ 当成被删了，清掉。
+            val oldestRemote = remote.minOfOrNull { it.updatedAtUnixMs } ?: Long.MAX_VALUE
+            // updatedAt 是 Unix 毫秒（与服务端同一个量纲），别用 elapsedRealtime
+            val staleCutoff = System.currentTimeMillis() - STALE_CLEANUP_MS
+            current.filter { it.taskId !in remoteIds }.forEach { local ->
+                val truncated = local.updatedAt < oldestRemote
+                if (truncated) return@forEach
+
+                val finished = TransferStates.isTerminal(local.state)
+                val idle = local.updatedAt < staleCutoff
+                if (finished || idle) {
+                    toDelete += local.taskId
+                    dropped += local.taskId
+                }
+            }
+
             for (task in remote) {
                 val existing = byId[task.taskId]
+
+                // 服务端说"暂停了"，本地却还在传：把暂停标记灌进引擎，让传输循环
+                // 在下一块自己停下。只靠界面把状态显示成 paused 是不够的——
+                // 后台仍在写数据，本地又会把状态改回 transferring，界面上就是
+                // 暂停/传输来回闪（真机现象），而且"电脑点了暂停，手机还在传"。
+                //
+                // 判据用**服务端的状态**，不看本地是否 active：
+                // 服务端已经 paused 就是事实，本地在不在跑都必须服从。
+                // 以前要求 existing.isActive，本地一旦是 interrupted/failed
+                // 就再也不接受暂停标记，电脑那边点了暂停、手机却继续往下传。
+                // 唯一的例外是本地已经 paused：不必重复登记（否则集合越堆越大，
+                // 用户点「继续」时又会被这条标记按住）。
+                //
+                // 刚点过「继续」的任务有 10 秒宽限：服务端状态追上之前不能把它又按住。
+                //
+                // 但这个宽限**只在"服务端还停在 paused"时成立**。服务端一旦确认恢复
+                // （变成 transferring 等），就把宽限清掉——之后再收到 paused 是用户
+                // 新按的暂停，必须立刻服从。否则"点继续、紧接着点暂停"这 10 秒里
+                // 手机还在照传，看起来就是"电脑暂停没反应"。
+                if (task.state != TransferStates.PAUSED) {
+                    resumeGraceUntilMs.remove(task.taskId)
+                }
+
+                val grace = resumeGraceUntilMs[task.taskId] ?: 0L
+                if (task.state == TransferStates.PAUSED &&
+                    existing?.state != TransferStates.PAUSED &&
+                    grace < SystemClock.elapsedRealtime()
+                ) {
+                    pausedTasks += task.taskId
+                }
+
+                // 服务端已取消（另一端删了这条正在传的任务，或在别处点了取消）：
+                // 本地半成品跟着清。`.wcpart` 是按整文件预分配的，
+                // 不删的话一个 1.45 GB 的下载取消后还占着 1.45 GB。
+                if (task.state == TransferStates.CANCELLED) {
+                    pausedTasks.remove(task.taskId)
+
+                    // **取消是双向的**（需求 2）：谁取消的都一样，这条记录两端都不留。
+                    // 对方取消整批之后，手机列表里不该还挂着一批"已取消"的行
+                    // （真机：电脑取消作业后，手机还能看到）。
+                    cancelledByPeer += task.taskId
+                    toDelete += task.taskId
+                    dropped += task.taskId
+
+                    runCatching { tempFile(task.taskId).delete() }
+
+                    // 已经落盘的文件也要删：取消 = 记录和数据都清掉。
+                    // 引擎没有 SAF 权限，把落点记下来交给界面层删。
+                    runCatching {
+                        db.transferDao().get(task.taskId)?.destinationUri
+                    }.getOrNull()?.takeIf { it.isNotBlank() }?.let { cancelledSavedUris += it }
+                }
+
+                // 任务已经结束：宽限记录跟着清掉，否则一天几百个任务会一直堆在内存里
+                if (TransferStates.isTerminal(task.state)) {
+                    resumeGraceUntilMs.remove(task.taskId)
+                }
+
+                if (task.taskId in dropped) {
+                    // 对方取消的：本地记录已删，这一行也不该再出现
+                    byId.remove(task.taskId)
+                    continue
+                }
+
                 byId[task.taskId] = if (existing == null) {
                     task.toItem()
                 } else {
@@ -1089,6 +1393,11 @@ class TransferEngine(
                     existing.copy(
                         fileName = task.fileName,
                         deviceName = task.deviceName,
+                        // 分组键以服务端为准：本地条目可能是旧版本留下的（这两个字段
+                        // 是 2.10.2 才加的，旧条目里是空），不补的话整文件夹永远分不成一组。
+                        relativePath = task.relativePath.ifBlank { existing.relativePath },
+                        batchId = task.batchId ?: existing.batchId,
+                        batchName = task.batchName ?: existing.batchName,
                         totalBytes = task.totalBytes,
                         transferredBytes = maxOf(existing.transferredBytes, task.transferredBytes),
                         chunkSize = task.chunkSize,
@@ -1103,6 +1412,11 @@ class TransferEngine(
             }
 
             byId.values.sortedByDescending { it.updatedAt }
+        }
+
+        // 对方取消的记录：从本机数据库里删掉
+        toDelete.distinct().forEach { id ->
+            runCatching { db.transferDao().delete(id) }
         }
     }
 
@@ -1125,6 +1439,29 @@ class TransferEngine(
         batchName = batchName,
         relativePath = relativePath,
     )
+
+    /**
+     * 通知电脑删掉这些记录（本机已经删了，尽力而为）。
+     *
+     * 离线时不阻塞本地删除：用户点了"不要了"是本机的决定，
+     * 电脑那边下次联网再清也没关系。
+     */
+    suspend fun deleteRecordsOnServer(taskIds: List<String>, deleteFiles: Boolean) {
+        if (taskIds.isEmpty()) return
+        runCatching { api.deleteRecords(token, taskIds, deleteFiles) }
+    }
+
+    /**
+     * **取消**一批：告诉服务端"这条传输到此为止"。
+     *
+     * 与 [deleteRecordsOnServer] 不同：删除记录是**各删各的**（清自己的历史），
+     * 取消是**双向**的——另一端也不该再留着这批的任何一条，尤其是已经传完的那些
+     * （真机：双端拉文件夹，手机取消后电脑还把它们归在「已完成」里）。
+     */
+    suspend fun cancelBatchOnServer(taskIds: List<String>, deleteFiles: Boolean) {
+        if (taskIds.isEmpty()) return
+        runCatching { api.batchAction(token, taskIds, "cancel", deleteFiles) }
+    }
 
     /** 记录已在服务端删除：立刻从本地列表里拿掉，不等下一轮刷新。 */
     fun forget(taskIds: Collection<String>) {

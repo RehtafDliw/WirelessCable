@@ -111,9 +111,33 @@ public sealed class WindowsHotspotService
             var baseline = SnapshotAddresses();
 
             var current = TryGetConfiguration(manager);
+
+            // 密码必须一起比：只看 SSID 会漏掉"系统里是旧密码、二维码里写新密码"
+            // —— 真机实测就是这样，手机扫码连热点报"密码错误"。
+            //
+            // Passphrase 在部分系统版本上读不回（空串）。这时按"没配过"处理，
+            // 强制重配一次：宁可多配一次（已连设备密码不变会自动重连），
+            // 也不能让二维码里写着一个系统里不存在的密码。
+            var currentPass = current?.Passphrase ?? string.Empty;
+            var passUnknown = current is not null && string.IsNullOrEmpty(currentPass);
+            var passMismatch = !passUnknown
+                               && !string.Equals(currentPass, passphrase, StringComparison.Ordinal);
+
             var needsConfigure = current is null
                                  || !string.Equals(current.Ssid, ssid, StringComparison.Ordinal)
-                                 || !HotspotCredentials.IsValidPassphrase(settings.HotspotPassphrase);
+                                 || !HotspotCredentials.IsValidPassphrase(settings.HotspotPassphrase)
+                                 || passUnknown
+                                 || passMismatch;
+
+            if (current is not null && needsConfigure)
+            {
+                Log.Information(
+                    "热点需要重配：ssid={CurrentSsid}/{WantedSsid} 密码读回={PassReadable} 密码一致={PassMatch}",
+                    current.Ssid,
+                    ssid,
+                    !string.IsNullOrEmpty(currentPass),
+                    passUnknown ? "未知" : passMismatch ? "否" : "是");
+            }
 
             if (needsConfigure)
             {
@@ -198,31 +222,45 @@ public sealed class WindowsHotspotService
         }
     }
 
-    /// <summary>关掉应用自己开的热点。用户手动开的不动。</summary>
-    public async Task StopAsync()
+    /// <summary>
+    /// 关掉应用自己开的热点。用户手动开的不动。
+    ///
+    /// "是不是我们开的"不能只看内存里的 <see cref="StartedByUs"/>：进程重启后这个标记就丢了，
+    /// 于是"应用开的热点，应用自己关不掉"（实测：关热点直接返回、地址还在）。
+    /// 补一条判据——SSID 是应用派生/配置出来的（`WirelessCable-XXXX`），就认。
+    /// </summary>
+    /// <returns>
+    /// true 表示**这次真的关掉了**。调用方据此把残留的热点网段地址从二维码里剔掉
+    /// （网卡 IP 会多留几秒，那时它已经不可达）。
+    /// </returns>
+    public async Task<bool> StopAsync()
     {
-        if (!StartedByUs)
-        {
-            return;
-        }
-
         await Gate.WaitAsync().ConfigureAwait(false);
         try
         {
             var manager = ResolveManager();
             if (manager is null || manager.TetheringOperationalState != TetheringOperationalState.On)
             {
-                return;
+                return false;
+            }
+
+            if (!StartedByUs && !IsOurHotspot(manager))
+            {
+                // 用户自己在系统设置里开的热点：不动，也不该动（我们读不回它的密码）
+                Log.Information("热点不是应用配置的那个，保持开启");
+                return false;
             }
 
             var result = await manager.StopTetheringAsync().AsTask().ConfigureAwait(false);
             Log.Information("关闭热点 status={Status}", result.Status);
             Current = null;
             StartedByUs = false;
+            return result.Status is TetheringOperationStatus.Success or TetheringOperationStatus.OperationInProgress;
         }
         catch (Exception ex)
         {
             Log.Warning(ex, "关闭热点失败");
+            return false;
         }
         finally
         {
@@ -230,12 +268,31 @@ public sealed class WindowsHotspotService
         }
     }
 
-    /// <summary>取热点网段上本机的地址；最多等 6 秒让虚拟网卡拿到 IP。</summary>
+    /// <summary>当前热点的 SSID 是不是应用自己配的那个。</summary>
+    private static bool IsOurHotspot(NetworkOperatorTetheringManager manager)
+    {
+        var current = TryGetConfiguration(manager);
+        if (current is null || string.IsNullOrWhiteSpace(current.Ssid))
+        {
+            return false;
+        }
+
+        var settings = DesktopSettingsStore.Load();
+        var ours = string.IsNullOrWhiteSpace(settings.HotspotSsid)
+            ? HotspotCredentials.DeriveSsid(Environment.MachineName)
+            : settings.HotspotSsid;
+
+        return string.Equals(current.Ssid, ours, StringComparison.Ordinal);
+    }
+
+    /// <summary>取热点网段上本机的地址；最多等 15 秒让虚拟网卡拿到 IP。</summary>
     private static async Task<string?> WaitForHotspotAddressAsync(
         HashSet<string> baseline,
         CancellationToken cancellationToken)
     {
-        for (var attempt = 0; attempt < 12; attempt++)
+        // 30 × 500 ms：热点网卡从创建到拿到 192.168.137.1 要经 ICS 配地址，
+        // 实测第一次开启时会先出现一个 APIPA 地址，2~10 秒后才换成正式网段。
+        for (var attempt = 0; attempt < 30; attempt++)
         {
             var address = FindHotspotAddress(baseline);
             if (address is not null)
@@ -287,7 +344,15 @@ public sealed class WindowsHotspotService
     /// </summary>
     private static string? FindHotspotAddress(HashSet<string> baseline)
     {
-        var candidates = EnumerateIPv4();
+        // APIPA（169.254.x.x）必须排除。
+        //
+        // 热点网卡刚创建时系统先给它一个链路本地地址，ICS 配好之后才换成
+        // 192.168.137.1。原来按"开热点前后新出现的地址"取，第一次开热点必然
+        // 抓到那个 APIPA（实测 169.254.253.184），写进二维码后手机连上热点
+        // 也访问不到电脑——"第一次出码就是坏的，点重新生成才好"。
+        var candidates = EnumerateIPv4()
+            .Where(c => !IsApipa(c.Address))
+            .ToList();
 
         // 1. Windows 移动热点的默认网段，最稳
         var defaultSubnet = candidates
@@ -310,6 +375,10 @@ public sealed class WindowsHotspotService
         var softAp = candidates.FirstOrDefault(c => IsSoftApAdapter(c.Nic) && !upstream.Contains(c.Address));
         return softAp.Address;
     }
+
+    /// <summary>169.254.0.0/16：链路本地地址，说明这张网卡还没拿到真正的 IP。</summary>
+    private static bool IsApipa(string address)
+        => address.StartsWith("169.254.", StringComparison.Ordinal);
 
     private static bool IsSoftApAdapter(NetworkInterface nic)
     {

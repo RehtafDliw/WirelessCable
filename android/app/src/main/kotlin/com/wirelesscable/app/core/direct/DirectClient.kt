@@ -640,7 +640,7 @@ class DirectClient private constructor(
      * SYN/ACK 和 TLS 握手全都正常，`status()` 也是秒回，但一开始传数据就掉到 1 KB/s：
      *
      * ```
-     * 快路径：172.18.15.58 可达，跳过热点
+     * 快路径：192.0.2.58 可达，跳过热点
      * 链路测速 16384B / 8034ms = 1 KB/s（中途 SocketTimeoutException）
      * ```
      *

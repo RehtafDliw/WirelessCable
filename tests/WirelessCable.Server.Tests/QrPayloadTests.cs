@@ -34,12 +34,12 @@ public sealed class QrPayloadTests
         var payload = service.CreatePayload(
             "device-1",
             "客厅电脑",
-            ["172.18.15.63", "192.168.137.1", "172.17.13.108"],
+            ["192.0.2.63", "192.168.137.1", "198.51.100.108"],
             47110,
             Fingerprint,
             Hotspot());
 
-        Assert.Equal(["172.18.15.63", "172.17.13.108"], payload.Addresses);
+        Assert.Equal(["192.0.2.63", "198.51.100.108"], payload.Addresses);
         Assert.NotNull(payload.Hotspot);
         Assert.Equal("192.168.137.1", payload.Hotspot!.Address);
     }
@@ -52,22 +52,22 @@ public sealed class QrPayloadTests
         var payload = service.CreatePayload(
             "device-1",
             "客厅电脑",
-            ["172.18.15.63", "192.168.137.1"],
+            ["192.0.2.63", "192.168.137.1"],
             47110,
             Fingerprint);
 
         Assert.Null(payload.Hotspot);
-        Assert.Equal(["172.18.15.63", "192.168.137.1"], payload.Addresses);
+        Assert.Equal(["192.0.2.63", "192.168.137.1"], payload.Addresses);
     }
 
     [Fact]
     public void ExcludeHotspot_RemovesDuplicatesAndBlank()
     {
         var result = QrPairingService.ExcludeHotspot(
-            ["172.18.15.63", "", "172.18.15.63", "192.168.137.1"],
+            ["192.0.2.63", "", "192.0.2.63", "192.168.137.1"],
             "192.168.137.1");
 
-        Assert.Equal(["172.18.15.63"], result);
+        Assert.Equal(["192.0.2.63"], result);
     }
 
     [Fact]
@@ -77,7 +77,7 @@ public sealed class QrPayloadTests
         var payload = service.CreatePayload(
             "device-1",
             "客厅电脑",
-            ["172.18.15.63"],
+            ["192.0.2.63"],
             47110,
             Fingerprint,
             Hotspot());

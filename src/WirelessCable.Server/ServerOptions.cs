@@ -27,10 +27,17 @@ public sealed class ServerOptions
     /// </para>
     /// <para>
     /// 放宽不降低安全性：所有非回环请求都要令牌，分块路径本来就不计入配额，
-    /// 600/分钟（10/秒）对局域网轮询足够宽裕，仍能挡住失控的客户端。
+    /// 对局域网轮询足够宽裕，仍能挡住失控的客户端。
+    /// </para>
+    /// <para>
+    /// 2.10.3 从 600 提到 1800：**整文件夹传输本身就是一个正常的请求尖峰**。
+    /// 实测一次 326 个文件的上传：`/transfer/uploads` 330 次 + `/tasks/{id}/complete` 327 次，
+    /// 再加作业/索引/心跳/列表轮询，两分钟内就冲到 600，之后连续 387 次 429——
+    /// 手机端弹"请求过于频繁"，传输卡在最后几个文件。
+    /// 每一次请求都是配对的设备发的，阈值该按"单设备批量传输的合法峰值"定，而不是按轮询定。
     /// </para>
     /// </summary>
-    public int RateLimitPerMinute { get; init; } = 600;
+    public int RateLimitPerMinute { get; init; } = 1800;
 
     /// <summary>允许的客户端协议版本集合。</summary>
     public IReadOnlyList<int> SupportedProtocolVersions { get; init; } = [ProtocolConstants.CurrentVersion];

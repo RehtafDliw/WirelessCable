@@ -344,23 +344,43 @@ public static class TransferEndpoints
             }
             else
             {
+                var code = one.Error?.Code;
+
+                // 取消整批时，已经传完/已经删掉的那几条返回"任务已结束"是正常的：
+                // 它们本来就该被一起清掉（真正清理由 CancelBatchAsync 做），不算失败。
+                if (action == "cancel" &&
+                    code is ErrorCodes.TransferStateInvalid or ErrorCodes.TransferNotFound)
+                {
+                    result.Ok++;
+                    continue;
+                }
+
                 result.Failed++;
-                result.FirstError ??= one.Error?.Message ?? one.Error?.Code;
+                result.FirstError ??= one.Error?.Message ?? code;
             }
         }
 
-        // 一条都没成功才算整体失败：批里本来就有已完成的任务时，
-        // 暂停它们会失败，但用户要的是"剩下的都停下"，不该整单报错。
-        if (result.Ok == 0)
+        // 取消：**双向**终止 —— 任务终结、两端都删记录、作业作废。
+        // 整文件夹里已经传完的那些也要一起清掉，否则另一端还把它们归在「已完成」里
+        // （真机：勾了"同时删除文件"也照旧留着）。
+        if (action == "cancel")
         {
-            await WriteErrorAsync(
-                context,
-                ErrorCodes.TransferStateInvalid,
-                result.FirstError ?? "这一批任务都处理不了。",
-                409).ConfigureAwait(false);
-            return;
+            var cancelled = await engine
+                .CancelBatchAsync(device, request.TaskIds, request.DeleteFiles, cancellationToken)
+                .ConfigureAwait(false);
+            if (cancelled.Success && cancelled.Value is not null)
+            {
+                result.Ok += cancelled.Value.Cancelled + cancelled.Value.Deleted;
+                result.FirstError ??= cancelled.Value.Rejected.FirstOrDefault();
+            }
         }
 
+        // 一条都没成功也不算请求失败：批里本来就有已完成的任务时，
+        // 暂停它们会失败，但用户要的是"剩下的都停下"，不该整单报错。
+        //
+        // 返回 200 而不是 409：手机端暂停/取消时同时要停队列，这个请求失败
+        // 会被当成"整批都处理不了"，用户看到红字、后面的步骤也不敢做。
+        // 结构保持 TransferBatchActionResultDto（手机端按它反序列化）。
         await ApiResponseWriter.WriteSuccessAsync(context, result, cancellationToken).ConfigureAwait(false);
     }
 

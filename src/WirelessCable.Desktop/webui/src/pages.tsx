@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ACCENTS, Badge, Button, Dialog, Stat, useOink } from 'oink-ui';
-import { Icon } from './Icon';
+import { Badge, Button, Dialog, Stat, useOink } from 'oink-ui';
+import { Icon, type IconName } from './Icon';
 import {
+  ApiError,
   api,
+  download,
   type DevicesResponse,
   type PairedDevice,
   type PairingQr,
@@ -16,6 +18,7 @@ import { useApi } from './useApi';
 import { t } from './i18n';
 import {
   copyText,
+  fileIcon,
   isDesktop,
   openFile,
   openPath,
@@ -166,7 +169,9 @@ export function HomePage({
   // 多台在线时，选完文件先挂在这里等用户选设备（不确定目标就不发）
   const [pendingSend, setPendingSend] = useState<string[] | null>(null);
 
-  const rows = transfers.data ?? [];
+  // **取消的记录两端都不显示**（需求 2）：谁取消的都一样——
+  // 传输已经终止，这条历史没有保留的意义。手机端同样会把本地记录清掉。
+  const rows = (transfers.data ?? []).filter((row) => row.state !== 'cancelled');
   const paired = devices.data?.paired ?? [];
   const online = paired.filter((d) => d.online && !d.sessionPaused);
 
@@ -471,8 +476,39 @@ export function PairingQrDialog({
   const [generation, setGeneration] = useState(0);
   const [now, setNow] = useState(() => Date.now());
 
+  // null = 还没读到偏好。读到之前不出码：否则会先用"不开热点"出一张，
+  // 紧接着又被偏好改回 true 重出一张，白开一次热点。
+  const [hotspot, setHotspot] = useState<boolean | null>(null);
+
   useEffect(() => {
     if (!open) {
+      setHotspot(null);
+      return;
+    }
+
+    let alive = true;
+    api
+      .get<SettingsSnapshot>('/settings')
+      .then((snapshot) => {
+        if (alive) {
+          setHotspot(Boolean(snapshot.hotspotOnPairing));
+        }
+      })
+      .catch(() => {
+        // 读不到偏好就按"不开"处理：开热点可能让电脑断网，不能默认开
+        if (alive) {
+          setHotspot(false);
+        }
+      });
+
+    return () => {
+      alive = false;
+    };
+  }, [open]);
+
+  useEffect(() => {
+    // hotspot === null 说明偏好还没回来，等下一轮
+    if (!open || hotspot === null) {
       return;
     }
 
@@ -482,7 +518,7 @@ export function PairingQrDialog({
     setQr(null);
 
     api
-      .post<PairingQr>('/pairing/qr')
+      .post<PairingQr>('/pairing/qr', { hotspot })
       .then((result) => {
         if (!alive) {
           return;
@@ -510,7 +546,7 @@ export function PairingQrDialog({
     return () => {
       alive = false;
     };
-  }, [open, generation]);
+  }, [open, generation, hotspot]);
 
   // 倒计时。只在对话框开着时跑，关掉就停，别让页面每秒重渲染。
   useEffect(() => {
@@ -569,7 +605,7 @@ export function PairingQrDialog({
             />
           ) : (
             <span style={{ font: '450 12.5px/1.5 var(--ok-font)', color: '#666' }}>
-              {busy ? t('正在准备热点…') : (error ?? t('未生成'))}
+              {busy ? (hotspot ? t('正在准备热点…') : t('生成中…')) : (error ?? t('未生成'))}
             </span>
           )}
 
@@ -596,16 +632,42 @@ export function PairingQrDialog({
           >
             {qr ? (expired ? t('已过期') : t(`有效期 ${remain} 秒`)) : ' '}
           </span>
-          {qr?.hotspot && (
+          {qr?.hotspotSsid && qr?.hotspotPassphrase && (
             <span style={{ font: '450 12px/1.5 var(--ok-font)', color: 'var(--ok-text-3)' }}>
-              {qr.hotspot}
+              {t(`备用热点 ${qr.hotspotSsid} · 密码 ${qr.hotspotPassphrase}`)}
             </span>
           )}
           {qr?.hotspotError && (
             <span style={{ font: '450 12px/1.5 var(--ok-font)', color: 'var(--ok-text-3)' }}>
-              {qr.hotspotError}
+              {t(qr.hotspotError)}
             </span>
           )}
+        </div>
+
+        {/*
+          热点是可选兜底：开了手机就能在另一张网里扫码配对，但电脑靠 Wi-Fi 上网、
+          网卡又不支持 STA+AP 并发时，开热点会把电脑自己踢下线。所以由用户决定，
+          选择记在 settings.json 里，下次出码沿用。文案与手机端「当面直连」一致。
+        */}
+        <div style={{ display: 'grid', gap: 2, justifyItems: 'start' }}>
+          <label className="wc-checkline" style={{ fontSize: 12.5 }}>
+            <input
+              type="checkbox"
+              checked={hotspot === true}
+              disabled={hotspot === null}
+              onChange={(event) => setHotspot(event.target.checked)}
+            />
+            {t('用热点直连')}
+          </label>
+          <span
+            style={{
+              font: '450 11.5px/1.5 var(--ok-font)',
+              color: 'var(--ok-text-3)',
+              paddingLeft: 22,
+            }}
+          >
+            {t('当前网络传不动时打开。手机连不上会改用这个热点。')}
+          </span>
         </div>
 
         {error && (
@@ -1014,33 +1076,204 @@ type RowGroup = {
  * 顺序按"第一次出现"的位置决定——服务端已经按创建时间排好了，
  * 这里只做合并，不重新排序（否则行会随着进度回报来回跳）。
  */
-function groupTasks(rows: TransferDto[]): RowGroup[] {
-  // 优先用服务端给的 batchId；没有批次的按**落点目录的第一段**兜底分组。
-  //
-  // 整文件夹下载走的是逐条 `/files/jobs`，服务端不会给这些任务写 batchId，
-  // 于是一次 330 张图就在列表里铺 330 行。单文件下载的 relativePath 没有 '/'，
-  // 不会被误并进某个批次。
-  const keyOf = (row: TransferDto): string | null => {
-    if (row.batchId) {
-      return row.batchId;
+/**
+ * 同一目录的两次传输之间隔了这么久，就当两批。
+ *
+ * 服务端不给逐条建出来的任务写 batchId，只能按落点目录分组；但目录会复用：
+ * 昨天传了 128 张 Screenshots，今天又传 330 张，两者在同一个目录里，
+ * 合并显示会变成"文件夹只有 330 个文件，怎么传到 458 了"。
+ */
+const BATCH_GAP_MS = 5 * 60 * 1000;
+
+/** 任务生命周期可能只有几十毫秒，1.5 秒的轮询根本抓不到 transferring。 */
+const LIVE_WINDOW_MS = 8 * 1000;
+
+/**
+ * 行首的文件类型图标（Windows 默认关联图标）。
+ *
+ * 按扩展名缓存：一个 330 张图的批次只有 `.jpg` 一种扩展名，只需问宿主一次；
+ * 图标本身的 base64 也有几 KB，缓存能省掉重复的桥调用和渲染开销。
+ * 拿不到（非桌面环境 / 系统调用失败）就回退到内置图标。
+ */
+const ICON_CACHE = new Map<string, Promise<string | null>>();
+
+function FileTypeIcon({
+  path,
+  folder,
+  fallback,
+}: {
+  path: string | null;
+  folder: boolean;
+  fallback: IconName;
+}) {
+  const key = folder
+    ? '__folder__'
+    : (/\.[^./\\]+$/.exec(path ?? '')?.[0].toLowerCase() ?? '__file__');
+  const [src, setSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+
+    let pending = ICON_CACHE.get(key);
+    if (!pending) {
+      pending = fileIcon(key.startsWith('__') ? '' : key, folder ? 'folder' : 'file');
+      ICON_CACHE.set(key, pending);
     }
 
+    pending.then((value) => {
+      if (alive) {
+        setSrc(value);
+      }
+    });
+
+    return () => {
+      alive = false;
+    };
+  }, [key, folder]);
+
+  if (!src) {
+    return <Icon name={fallback} />;
+  }
+
+  return (
+    <img
+      src={src}
+      width={28}
+      height={28}
+      alt=""
+      draggable={false}
+      style={{ objectFit: 'contain' }}
+    />
+  );
+}
+
+/**
+ * 整文件夹下载的"计划总量"。
+ *
+ * 电脑端是**一个文件一个作业**地让手机传（`/files/jobs` 逐条下发），服务端要等作业跑完
+ * 才建出对应的传输任务。所以「传输中」这一栏永远只显示已经建出来的那几个——
+ * 300 个文件的文件夹看起来像 17 个，进度还是 17/17 的 100%。
+ *
+ * 但发起时前端已经把整个目录递归列完了，总数和总字节都是已知的。
+ * 存一份到 sessionStorage，界面按它显示 `已完成 17/330` 和真实进度。
+ */
+type BatchPlan = { total: number; totalBytes: number; at: number };
+
+const BATCH_PLAN_KEY = 'wc.batchPlans';
+const BATCH_PLAN_TTL_MS = 6 * 60 * 60 * 1000;
+
+function readBatchPlans(): Record<string, BatchPlan> {
+  try {
+    const raw = sessionStorage.getItem(BATCH_PLAN_KEY);
+    if (!raw) {
+      return {};
+    }
+
+    const parsed = JSON.parse(raw) as Record<string, BatchPlan>;
+    const now = Date.now();
+    const alive: Record<string, BatchPlan> = {};
+    Object.entries(parsed).forEach(([key, plan]) => {
+      if (plan && typeof plan.total === 'number' && now - plan.at < BATCH_PLAN_TTL_MS) {
+        alive[key] = plan;
+      }
+    });
+    return alive;
+  } catch {
+    return {};
+  }
+}
+
+function writeBatchPlan(key: string, plan: BatchPlan): void {
+  try {
+    const all = readBatchPlans();
+    all[key] = plan;
+    sessionStorage.setItem(BATCH_PLAN_KEY, JSON.stringify(all));
+  } catch {
+    // 存不进去最多是数字不准，传输本身不受影响
+  }
+}
+
+function dropBatchPlan(key: string): void {
+  try {
+    const all = readBatchPlans();
+    if (key in all) {
+      delete all[key];
+      sessionStorage.setItem(BATCH_PLAN_KEY, JSON.stringify(all));
+    }
+  } catch {
+    // 同上
+  }
+}
+
+/** 取路径的父目录：`D:\recv\Screenshots\a.jpg` → `D:\recv\Screenshots`。 */
+function dirOf(path: string | null | undefined): string | null {
+  if (!path) {
+    return null;
+  }
+
+  const cut = Math.max(path.lastIndexOf('\\'), path.lastIndexOf('/'));
+  return cut > 0 ? path.slice(0, cut) : null;
+}
+
+function groupTasks(rows: TransferDto[]): RowGroup[] {
+  // 1. 归桶：有 batchId 按 batchId，没有的按落点目录第一段
+  const buckets = new Map<string, TransferDto[]>();
+  const names = new Map<string, string>();
+
+  const keyOf = (row: TransferDto): string | null => {
     const slash = (row.relativePath ?? '').indexOf('/');
-    return slash > 0 ? `dir:${row.relativePath!.slice(0, slash)}` : null;
+    const dirKey = slash > 0 ? `dir:${row.relativePath!.slice(0, slash)}` : null;
+    return row.batchId ?? dirKey;
   };
 
-  const byBatch = new Map<string, TransferDto[]>();
   rows.forEach((row) => {
     const key = keyOf(row);
     if (!key) {
       return;
     }
 
-    const list = byBatch.get(key) ?? [];
-    list.push(row);
-    byBatch.set(key, list);
+    if (!buckets.has(key)) {
+      buckets.set(key, []);
+      const slash = (row.relativePath ?? '').indexOf('/');
+      names.set(key, row.batchName || (slash > 0 ? row.relativePath!.slice(0, slash) : key));
+    }
+
+    buckets.get(key)!.push(row);
   });
 
+  // 2. 每个桶内按"创建时间断层"切成多批
+  const chunks = new Map<string, RowGroup[]>();
+  buckets.forEach((list, key) => {
+    const sorted = [...list].sort((a, b) => a.createdAtUnixMs - b.createdAtUnixMs);
+    const parts: TransferDto[][] = [];
+    let current: TransferDto[] = [];
+
+    sorted.forEach((row) => {
+      if (current.length > 0 && row.createdAtUnixMs - current[current.length - 1].createdAtUnixMs > BATCH_GAP_MS) {
+        parts.push(current);
+        current = [];
+      }
+
+      current.push(row);
+    });
+
+    if (current.length > 0) {
+      parts.push(current);
+    }
+
+    chunks.set(
+      key,
+      parts.map((items) => ({
+        // key 用批内最早那条的 taskId：稳定，不会随进度变化而重建 DOM
+        key: `batch:${key}#${items[0].taskId}`,
+        batchId: key,
+        name: names.get(key) ?? key,
+        items,
+      })),
+    );
+  });
+
+  // 3. 按 rows 的原顺序输出（rows 已按创建时间倒序，最新一批排在最前）
   const emitted = new Set<string>();
   const groups: RowGroup[] = [];
 
@@ -1056,15 +1289,30 @@ function groupTasks(rows: TransferDto[]): RowGroup[] {
     }
 
     emitted.add(key);
-    groups.push({
-      key: `batch:${key}`,
-      batchId: key,
-      name: row.batchName || key.replace(/^dir:/, ''),
-      items: byBatch.get(key) ?? [row],
-    });
+    groups.push(...(chunks.get(key) ?? []));
   });
 
   return groups;
+}
+
+/**
+ * 这一组是否还在进行。
+ *
+ * 光看 `isActive` 不够：单个文件几十毫秒就传完，两次轮询之间整批都可能跑完，
+ * 界面上"传输中"永远是空的、数字全堆在"已完成"。所以再加一条：
+ * 组里最近还有任务被创建，就说明这一批还没结束。
+ */
+function groupIsLive(group: RowGroup, now: number): boolean {
+  return (
+    group.items.some((row) => isActive(row.state)) ||
+    // 暂停的批还在「传输中」：它可以继续，扔进「已完成」用户就找不到了。
+    // 手机端一直把它留在传输中，两端这样才一致。
+    group.items.some((row) => row.state === 'paused') ||
+    // 队列里还有没执行的作业：整文件夹是逐条作业下发的，暂停时这些文件
+    // 还没有对应的传输任务，只看任务列表会把"停住了"误判成"传完了"。
+    group.items.some((row) => (row.queuedJobs ?? 0) > 0) ||
+    group.items.some((row) => now - row.createdAtUnixMs < LIVE_WINDOW_MS)
+  );
 }
 
 export function TransfersPage() {
@@ -1077,6 +1325,38 @@ export function TransfersPage() {
   const [menu, setMenu] = useState<{ key: string; x: number; y: number } | null>(null);
   // 删除确认：`name` 非空表示这是整批（整文件夹），标题里要写出文件夹名
   const [confirming, setConfirming] = useState<{ ids: string[]; name: string | null } | null>(null);
+
+  // 行上「取消」的目标：点按钮时已经暂停，这里只等用户决定"删"还是"继续"
+  const [cancelTarget, setCancelTarget] = useState<{
+    ids: string[];
+    name: string;
+    destinationPath: string | null;
+    receivedFiles: number;
+  } | null>(null);
+
+  // 点「继续」时才发现这条已被对面取消（对面删记录会先暂停再取消）。
+  // 旧行为是照样弹一句"已继续传输"——实际什么都没发生，用户以为在传。
+  const [peerCancelled, setPeerCancelled] = useState<{ ids: string[]; name: string } | null>(null);
+
+  // 整文件夹的"计划总量"：随每次轮询重新读，传完的批次顺手清掉
+  const [plans, setPlans] = useState<Record<string, BatchPlan>>(() => readBatchPlans());
+  useEffect(() => {
+    const rows = transfers.data ?? [];
+    const current = readBatchPlans();
+
+    Object.entries(current).forEach(([key, plan]) => {
+      const done = rows.filter(
+        (row) => `${row.deviceName}:${(row.relativePath ?? '').split('/')[0]}` === key
+          && row.state === 'completed',
+      );
+      if (done.length >= plan.total) {
+        dropBatchPlan(key);
+        delete current[key];
+      }
+    });
+
+    setPlans(current);
+  }, [transfers.data]);
   const askDelete = (ids: string[], name: string | null = null) => {
     if (ids.length === 0) {
       setConfirming(null);
@@ -1093,22 +1373,37 @@ export function TransfersPage() {
 
   // 服务端按 updated_at 倒序给，进度一变就换位 —— 这里按创建时间排，顺序固定。
   const rows = useMemo(
-    () => [...(transfers.data ?? [])].sort((a, b) => b.createdAtUnixMs - a.createdAtUnixMs),
+    () =>
+      [...(transfers.data ?? [])]
+        // **取消的记录两端都不显示**（需求 2）：取消 = 这条传输到此为止。
+        // 留着会变成"已完成里一行红色的"，用户以为传完了，其实半成品已经被清掉。
+        // （首页早就过滤了，传输页这一处漏了，所以出现了"红色跑到已完成里"。）
+        .filter((row) => row.state !== 'cancelled')
+        .sort((a, b) => b.createdAtUnixMs - a.createdAtUnixMs),
     [transfers.data],
   );
 
   const byFilter = rows.filter((row) =>
     filter === 'all' ? true : filter === 'sent' ? isSent(row.direction) : !isSent(row.direction),
   );
-  const active = byFilter.filter((row) => isActive(row.state));
-  const done = byFilter.filter((row) => !isActive(row.state));
 
   // 一次「下载整个文件夹」= 一批任务，列表里收成一行：
   // 200 个文件刷满 200 行既看不出是同一个文件夹，也没法整批暂停/整批删。
-  const activeGroups = useMemo(() => groupTasks(active), [active]);
-  const doneGroups = useMemo(() => groupTasks(done), [done]);
+  //
+  // **必须先分组、再决定整组进哪个页签**。以前是先按单条状态分成 active/done 再分组，
+  // 于是一个 326 文件的文件夹被劈成两半：已经传完的立刻掉进「已完成」，还在传的留在
+  // 「传输中」。用户看到的是"传输中空空如也"+"已完成 200 条、数字一直在涨"，
+  // 永远看不到这个文件夹的整体进度——而这正是分组要解决的问题。
+  const allGroups = useMemo(() => groupTasks(byFilter), [byFilter]);
+
+  // 不缓存：`groupIsLive` 依赖当前时间，轮询每次换数据都要重新判断，
+  // 否则刚结束的那一批会一直卡在「传输中」或者一闪就跳走。
+  const now = Date.now();
+  const activeGroups = allGroups.filter((group) => groupIsLive(group, now));
+  const doneGroups = allGroups.filter((group) => !groupIsLive(group, now));
+
   const groups = tab === 'active' ? activeGroups : doneGroups;
-  const shown = tab === 'active' ? active : done;
+  const shown = useMemo(() => groups.flatMap((group) => group.items), [groups]);
   const speeds = useSpeeds(shown);
 
   // 切页签/筛选就清空选择：否则会删到已经看不见的行
@@ -1122,10 +1417,9 @@ export function TransfersPage() {
   const selectedGroupCount = groups.filter((group) =>
     group.items.every((row) => selected.includes(row.taskId)),
   ).length;
-  // 能删的是"不在跑"的：失败/中断/暂停/完成都可以删，服务端也只拦在跑的那几种
-  const deletableIds = selectedRows
-    .filter((row) => !isInFlight(row.state))
-    .map((row) => row.taskId);
+  // **正在传的不给删**（需求 4）：传输中的条目只有「取消传输」一个动作。
+  // 删记录是"清理历史"，不该顺手把正在传的这条也终止掉——那是"取消"该干的事。
+  const deletableIds = selectedRows.filter((row) => !isInFlight(row.state)).map((row) => row.taskId);
   const receivedFiles = selectedRows.filter(
     (row) => !isActive(row.state) && !isSent(row.direction) && Boolean(row.localPath),
   ).length;
@@ -1181,45 +1475,142 @@ export function TransfersPage() {
    * 单条走 /transfers/{id}/{verb}；整批走 /transfers/batch 一次发完——
    * 200 个文件逐个发请求，光往返就要好几秒，中途失败还会只停一半。
    */
+  /**
+   * 这一行对应的落点目录（服务端 `FileOperationJobs.destination_path` 的键）。
+   *
+   * 逐条下发的作业没有真正的 batchId（行 key 是合成的 `dir:目录`），
+   * 恢复队列时按目录匹配最稳：`相册/2024/1.jpg` → `相册/2024`，
+   * 和作业里存的 `destination_path` 完全对得上。
+   *
+   * 只取首段（以前的 `slice(4)`）在多级目录上会误伤同名前缀的其它批；
+   * 有服务端 batchId 的批原来传 undefined，靠"设备级全量"兜底，
+   * 同理会把别的批一起停/启。
+   */
+  const dirKeyOf = (group: RowGroup): string | null => {
+    for (const row of group.items) {
+      const path = row.relativePath ?? '';
+      const slash = path.lastIndexOf('/');
+      if (slash > 0) return path.slice(0, slash);
+    }
+    return group.name || null;
+  };
+
   const actGroup = (
     group: RowGroup,
     verb: 'pause' | 'resume' | 'cancel' | 'restart',
     message: string,
   ) =>
     action.run(async () => {
+      // 恢复时服务端说"这条已经被对面取消"的任务 id
+      let cancelled: string[] = [];
+
       if (group.batchId) {
-        await api.post('/transfers/batch', {
+        const result = await api.post<{
+          ok: number;
+          failed: number;
+          skipped: number;
+          firstError?: string | null;
+          firstErrorCode?: string | null;
+          cancelledTasks?: string[];
+          jobsChanged: number;
+          noop: boolean;
+        }>('/transfers/batch', {
           taskIds: group.items.map((row) => row.taskId),
           action: verb,
+          // 暂停/恢复要连队列里还没执行的作业一起停：那些文件还没有传输任务，
+          // 只按 taskId 暂停等于什么都没停（用户会收到"只有进行中的任务可以暂停"）。
+          destinationPath: dirKeyOf(group) ?? undefined,
         });
+
+        transfers.reload();
+
+        // 旧版这里完全忽略返回值，一律提示"已继续传输"。
+        // 真实情况是：对面删了这条正在传的任务，服务端只会回"已被取消"，
+        // 任务一动不动——用户却以为在传，等到进程结束才发现文件没变。
+        cancelled = result.cancelledTasks ?? [];
+
+        if (cancelled.length === 0 && result.failed > 0 && result.firstError) {
+          // 一条都没恢复成（或只成了一部分）：把服务端给的原因说出来，
+          // 绝不能在什么都没发生的时候弹一句"已继续传输"。
+          throw new Error(result.firstError);
+        }
+
+        if (cancelled.length === 0 && result.ok === 0 && result.skipped > 0) {
+          // 全是"已经结束、没什么可继续的"——那就不该说"已继续传输"。
+          throw new Error(t('这些任务已经结束，没有可继续的'));
+        }
       } else {
-        await api.post(`/transfers/${group.items[0].taskId}/${verb}`);
+        try {
+          await api.post(`/transfers/${group.items[0].taskId}/${verb}`);
+        } catch (caught) {
+          if (
+            verb === 'resume' &&
+            caught instanceof ApiError &&
+            caught.code === 'transfer_cancelled'
+          ) {
+            cancelled = [group.items[0].taskId];
+          } else {
+            throw caught;
+          }
+        }
+
+        transfers.reload();
       }
 
-      transfers.reload();
-      return message;
-    }, message);
+      if (cancelled.length > 0) {
+        // 不提示成功：先问用户要不要把这条记录删掉
+        setPeerCancelled({ ids: cancelled, name: group.name });
+        return;
+      }
+
+      action.setNotice(message);
+    }, undefined);
 
   const menuGroup = menu ? (groups.find((group) => group.key === menu.key) ?? null) : null;
 
   const menuItems = (group: RowGroup) => {
     const items: { label: string; danger?: boolean; disabled?: boolean; onSelect: () => void }[] = [];
 
-    // 只有一个文件时才谈得上"定位/打开"——文件夹没有单一落点可定位
+    // 单个文件：既能定位，也能用默认程序打开。
+    // 整批：几百个文件没法"打开"，但它们都落在同一个目录——打开那个目录是合理需求，
+    // 以前整批的菜单里只有「删除整批」，用户根本找不到文件下到哪去了。
     const single = group.items.length === 1 ? group.items[0] : null;
+    const firstPath = group.items.find((row) => row.localPath)?.localPath ?? null;
+    const folder = single ? null : dirOf(firstPath);
 
-    if (single?.localPath && isDesktop()) {
+    if (isDesktop() && (single?.localPath || folder)) {
       items.push({
-        label: t('在资源管理器中显示'),
-        onSelect: () => action.run(() => openPath(single.localPath ?? ''), t('已定位到文件')),
+        label: folder ? t('打开所在目录') : t('在资源管理器中显示'),
+        onSelect: () =>
+          action.run(
+            () => openPath(single?.localPath ?? folder ?? ''),
+            folder ? t('已打开目录') : t('已定位到文件'),
+          ),
       });
     }
 
-    const groupActive = group.items.some((row) => isActive(row.state));
-    const allPaused = group.items.every((row) => row.state === 'paused');
+    if (isDesktop() && single?.localPath) {
+      items.push({
+        label: t('打开'),
+        onSelect: () => action.run(() => openFile(single.localPath ?? ''), t('已打开')),
+      });
+    }
+
+    // 判"还在跑"必须用 isInFlight，不能用 isActive：
+    // isActive 的语义是"留在「传输中」页签"（paused / failed / interrupted 都算），
+    // 拿它当"在跑"会让 allPaused 永远为假——点完暂停，行内仍写"传输中"。
+    const groupActive = group.items.some((row) => isInFlight(row.state));
+    // 暂停后 groupActive 为 false，但菜单必须还能给"继续"：
+    // 判据是"没有正在跑的 + 至少有一个暂停的"，不是"每一条都暂停"
+    // （整批里已经传完的那些永远是 completed，用 every 会永远为假）。
+    const anyPaused = group.items.some((row) => row.state === 'paused');
+    // 队列被暂停时，行内可能一条 paused 任务都没有（正在传的那个已经传完），
+    // 这时也要给「继续」，否则用户没有任何入口把这一批拉回来。
+    const queuePaused = group.items.some((row) => (row.pausedJobs ?? 0) > 0);
+    const allPaused = !groupActive && (anyPaused || queuePaused);
     const allStuck = group.items.every((row) => row.state === 'failed' || row.state === 'interrupted');
 
-    if (groupActive) {
+    if (groupActive || allPaused) {
       if (allPaused) {
         items.push({
           label: group.batchId ? t('继续整批') : t('继续'),
@@ -1246,16 +1637,22 @@ export function TransfersPage() {
       });
     }
 
-    items.push({
-      label: group.batchId ? t(`删除整批（${group.items.length} 个文件）`) : t('删除记录'),
-      danger: true,
-      disabled: group.items.some((row) => isInFlight(row.state)),
-      onSelect: () =>
-        askDelete(
-          group.items.map((row) => row.taskId),
-          group.batchId ? group.name : null,
-        ),
-    });
+    // 传输中的**文件夹**不显示删除记录（需求 4）：它只有「取消传输」一个动作。
+    // 单文件在传时保留入口但禁用——用户能看见"有这条但删不了"，比凭空消失更好懂。
+    const batchInFlight = Boolean(group.batchId) && group.items.some((row) => isInFlight(row.state));
+
+    if (!batchInFlight) {
+      items.push({
+        label: group.batchId ? t(`删除整批（${group.items.length} 个文件）`) : t('删除记录'),
+        danger: true,
+        disabled: group.items.some((row) => isInFlight(row.state)),
+        onSelect: () =>
+          askDelete(
+            group.items.map((row) => row.taskId),
+            group.batchId ? group.name : null,
+          ),
+      });
+    }
 
     return items;
   };
@@ -1268,8 +1665,9 @@ export function TransfersPage() {
             [
               // 数字用**文件条数**，不是分组行数：一整个文件夹只在列表里占一行，
               // 但用户关心的是"传了多少个文件"，显示组数会让人以为只有几个。
-              ['active', t(`传输中 ${active.length}`)],
-              ['done', t(`已完成 ${done.length}`)],
+              // 「传输中」把该批已完成的也算进去——它表示"这批还剩多少要传"。
+              ['active', t(`传输中 ${activeGroups.reduce((n, g) => n + g.items.length, 0)}`)],
+              ['done', t(`已完成 ${doneGroups.reduce((n, g) => n + g.items.length, 0)}`)],
             ] as const
           ).map(([key, label]) => (
             <button
@@ -1338,16 +1736,30 @@ export function TransfersPage() {
         <div className="wc-list">
           {groups.map((group, index) => {
             const lead = group.items[0];
-            const files = group.items.length;
-            const total = group.items.reduce((sum, row) => sum + row.totalBytes, 0);
+
+            // 整文件夹是"一个文件一个作业"下发的，服务端要到作业跑完才建任务，
+            // 所以这一行能看到的条目数永远小于文件夹里的真实文件数。
+            // 发起时前端已经列完了整个目录，用那份计划总量把数字补正。
+            const plan = plans[`${lead.deviceName}:${group.name}`];
+            const files = plan?.total ?? group.items.length;
+            const total = plan?.totalBytes ?? group.items.reduce((sum, row) => sum + row.totalBytes, 0);
             const doneBytes = group.items.reduce((sum, row) => sum + row.transferredBytes, 0);
             const speed = group.items.reduce((sum, row) => sum + (speeds[row.taskId] ?? 0), 0);
             const completed = group.items.filter((row) => row.state === 'completed').length;
-            const allPaused = group.items.every((row) => row.state === 'paused');
+            const anyPaused = group.items.some((row) => row.state === 'paused');
+            // 队列被暂停时行内可能一条 paused 任务都没有（正在传的那个刚好传完），
+            // 只看任务状态会显示「传输中」，明明用户已经点了暂停
+            const queuePaused = group.items.some((row) => (row.pausedJobs ?? 0) > 0);
+            // 同上：判"还在跑"用 isInFlight。若用 isActive（含 paused），
+            // 暂停后这一行会永远显示「传输中」，而底部提示写着「已暂停」。
+            const allPaused =
+              !group.items.some((row) => isInFlight(row.state)) && (anyPaused || queuePaused);
             const allStuck = group.items.every(
               (row) => row.state === 'failed' || row.state === 'interrupted',
             );
-            const allDone = group.items.every((row) => row.state === 'completed');
+            // 建出来的任务数还没到计划数时，现有条目全传完也不算整批完成
+            const allDone =
+              group.items.every((row) => row.state === 'completed') && group.items.length >= files;
             const checked = group.items.every((row) => selected.includes(row.taskId));
             // 文件夹里只有一个文件时，"打开/定位"仍然有意义
             const single = files === 1 ? group.items[0] : null;
@@ -1390,15 +1802,25 @@ export function TransfersPage() {
 
                 {tab === 'active' ? (
                   <Ring pct={pct} />
+                ) : allDone ? (
+                  // 传完了就显示它本身的类型图标（文件夹 / exe / jpg 各是各的），
+                  // 比一个统一的绿对号有用：用户一眼能看出这行是什么东西。
+                  <div className="wc-row__icon" style={{ background: 'transparent' }}>
+                    <FileTypeIcon
+                      path={lead.localPath}
+                      folder={Boolean(group.batchId)}
+                      fallback="check"
+                    />
+                  </div>
                 ) : (
                   <div
                     className="wc-row__icon"
                     style={{
-                      background: allDone ? 'var(--ok-success-soft)' : 'var(--ok-danger-soft)',
-                      color: allDone ? 'var(--ok-success-text)' : 'var(--ok-danger-text)',
+                      background: 'var(--ok-danger-soft)',
+                      color: 'var(--ok-danger-text)',
                     }}
                   >
-                    <Icon name={allDone ? 'check' : iconOf(lead.state)} />
+                    <Icon name={iconOf(lead.state)} />
                   </div>
                 )}
 
@@ -1421,7 +1843,10 @@ export function TransfersPage() {
                     {lead.deviceName || t('已移除的设备')} · {directionLabel(lead.direction)} ·{' '}
                     {group.batchId ? t(`已完成 ${completed}/${files} · `) : ''}
                     {formatBytes(doneBytes)} / {formatBytes(total)}
-                    {tab === 'active' && t(` · ${allPaused ? t('已暂停') : allStuck ? t('未完成') : t('传输中')}`)}
+                    {/* 一批已经全部传完、只是还在 8 秒活跃窗口里时，不能还说「传输中」——
+                        进度条 100% 配一行"传输中"自相矛盾，用户会以为卡住了 */}
+                    {tab === 'active' &&
+                      t(` · ${allPaused ? t('已暂停') : allStuck ? t('未完成') : allDone ? t('已完成') : t('传输中')}`)}
                   </div>
                   {tab === 'active' ? (
                     <div className="wc-progress" style={{ marginTop: 8 }}>
@@ -1472,6 +1897,25 @@ export function TransfersPage() {
                           <Icon name="pause" size={16} />
                         </Button>
                       )}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        iconOnly
+                        aria-label={group.batchId ? t('取消整批') : t('取消')}
+                        disabled={action.busy}
+                        onClick={() => {
+                          // 先停住：用户还在看确认框的时候，别再往电脑上流文件
+                          void actGroup(group, 'pause', t('已暂停'));
+                          setCancelTarget({
+                            ids: group.items.map((row) => row.taskId),
+                            name: group.name,
+                            destinationPath: dirKeyOf(group) ?? null,
+                            receivedFiles: group.items.filter((row) => row.state === 'completed').length,
+                          });
+                        }}
+                      >
+                        <Icon name="close" size={16} />
+                      </Button>
                       {allStuck && (
                         <Button
                           variant="ghost"
@@ -1534,6 +1978,17 @@ export function TransfersPage() {
         />
       )}
 
+      <CancelTransferDialog
+        target={cancelTarget}
+        onClose={() => setCancelTarget(null)}
+        onKeep={() => setCancelTarget(null)}
+        onDone={(message) => {
+          setCancelTarget(null);
+          action.setNotice(message);
+          transfers.reload();
+        }}
+      />
+
       <DeleteTransfersDialog
         ids={confirming?.ids ?? null}
         batchName={confirming?.name ?? null}
@@ -1546,6 +2001,47 @@ export function TransfersPage() {
           transfers.reload();
         }}
       />
+
+      {/*
+        点「继续」却什么都没发生：对面已经把这条任务删了（删除会先暂停再取消）。
+        以前这里照样提示"已继续传输"，用户等到最后才发现文件没动。
+        现在问一句要不要把本机的记录也清掉——不问就留着一条永远传不动的行。
+      */}
+      <Dialog
+        open={peerCancelled !== null}
+        onOpenChange={(value) => {
+          if (!value) {
+            setPeerCancelled(null);
+          }
+        }}
+        size={420}
+        tone="danger"
+        icon={<Icon name="trash" />}
+        title={t('传输已被接收方取消')}
+        actions={
+          <>
+            <Button variant="ghost" onClick={() => setPeerCancelled(null)}>
+              {t('保留记录')}
+            </Button>
+            <Button
+              variant="danger"
+              onClick={() => {
+                const target = peerCancelled;
+                setPeerCancelled(null);
+                if (target) {
+                  askDelete(target.ids, target.name);
+                }
+              }}
+            >
+              {t('删除这条记录')}
+            </Button>
+          </>
+        }
+      >
+        <span style={{ font: '450 12.5px/1.6 var(--ok-font)', color: 'var(--ok-text-2)' }}>
+          {t('这条传输已经被对方删除，继续也不会再传。要删掉本机的这条记录吗？')}
+        </span>
+      </Dialog>
     </div>
   );
 }
@@ -1616,6 +2112,143 @@ function RowMenu({
  * 语义与手机端一致：勾了「同时删除接收到的文件」也只删**本机收到的**文件
  * （手机传过来的那些），电脑发出去的原文件永远不动 —— 服务端同样按这个规则执行。
  */
+/**
+ * 行上的「取消」确认。
+ *
+ * 点按钮时已经暂停过了，这里只决定"删掉"还是"接着传"：
+ * 关掉弹窗 / 点「继续」→ 恢复；点「删除」→ 先作废队列里的作业，再删记录。
+ * 队列不作废的话，手机还会继续把剩下的文件传上来，删了也白删。
+ */
+function CancelTransferDialog({
+  target,
+  onClose,
+  onKeep,
+  onDone,
+}: {
+  target: { ids: string[]; name: string; destinationPath: string | null; receivedFiles: number } | null;
+  onClose: () => void;
+  onKeep: () => void;
+  onDone: (message: string) => void;
+}) {
+  const [withFiles, setWithFiles] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // 已经"结算"过（删掉或已恢复）就别在关闭弹窗时再恢复一次
+  const settled = useRef(false);
+
+  useEffect(() => {
+    setWithFiles(false);
+    setError(null);
+    settled.current = false;
+  }, [target]);
+
+  const isBatch = Boolean(target?.destinationPath);
+  const count = target?.ids.length ?? 0;
+
+  const keep = async () => {
+    if (!target || settled.current) {
+      onClose();
+      return;
+    }
+
+    settled.current = true;
+    setBusy(true);
+    try {
+      // 用户点的是「继续」：这一步失败（记录已删、任务已终态）也要把弹窗关掉，
+      // 否则他既继续不了、也退不出去。
+      await api
+        .post('/transfers/batch', {
+          taskIds: target.ids,
+          action: 'resume',
+          destinationPath: target.destinationPath ?? undefined,
+        })
+        .catch(() => undefined);
+      onKeep();
+    } catch (caught) {
+      settled.current = false;
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submit = async () => {
+    if (!target) {
+      return;
+    }
+
+    settled.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      // **一次取消**：作业作废 + 任务终结 + 两端都删记录（勾了就连文件一起删）。
+      // 以前分两步（先作废队列、再"删记录"），而"删记录"是**各删各的**——
+      // 另一端于是把已经传完的那些照旧归在「已完成」里（真机：双端拉文件夹时）。
+      // "取消"是双向的：两端都不该再留着这批的任何一条。
+      await api.post('/transfers/batch', {
+        taskIds: target.ids,
+        action: 'cancel',
+        destinationPath: target.destinationPath ?? undefined,
+        deleteFiles: withFiles,
+      });
+      onDone(t(`已取消 ${count} 个任务`));
+    } catch (caught) {
+      settled.current = false;
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog
+      open={target !== null}
+      onOpenChange={(value) => {
+        if (!value) {
+          void keep();
+        }
+      }}
+      size={430}
+      tone="danger"
+      icon={<Icon name="close" />}
+      title={isBatch ? t(`取消「${target?.name ?? ''}」的传输？`) : t('取消这个传输？')}
+      description={t('任务已暂停。点「删除」清掉记录，点「继续」接着传。')}
+      actions={
+        <>
+          <Button variant="ghost" onClick={() => void keep()} disabled={busy}>
+            {t('继续')}
+          </Button>
+          <Button variant="danger" onClick={() => void submit()} disabled={busy || count === 0}>
+            {t('删除')}
+          </Button>
+        </>
+      }
+    >
+      {isBatch && (
+        <>
+          <label className="wc-checkline" style={{ marginTop: 4 }}>
+            <input
+              type="checkbox"
+              checked={withFiles}
+              disabled={(target?.receivedFiles ?? 0) === 0}
+              onChange={(event) => setWithFiles(event.target.checked)}
+            />
+            {t(`同时删除已完成的文件（${target?.receivedFiles ?? 0} 个）`)}
+          </label>
+          <div style={{ font: '450 12px/1.5 var(--ok-font)', color: 'var(--ok-text-3)', marginTop: 6 }}>
+            {t('只删本机已经收到的文件；还没传完的会一起作废。')}
+          </div>
+        </>
+      )}
+      {error && (
+        <div style={{ font: '450 12.5px/1.5 var(--ok-font)', color: 'var(--ok-danger-text)', marginTop: 8 }}>
+          {error}
+        </div>
+      )}
+    </Dialog>
+  );
+}
+
 function DeleteTransfersDialog({
   ids,
   batchName,
@@ -1649,17 +2282,25 @@ function DeleteTransfersDialog({
     setBusy(true);
     setError(null);
     try {
-      const result = await api.post<{ deleted: number; rejected: string[] }>('/transfers/delete', {
+      const result = await api.post<{
+        deleted: number;
+        filesDeleted: number;
+        cancelled: number;
+        rejected: string[];
+      }>('/transfers/delete', {
         taskIds: ids,
         deleteFiles: withFiles,
       });
 
       const rejected = result.rejected?.length ?? 0;
-      onDone(
+      const cancelled = result.cancelled ?? 0;
+      const base =
         rejected > 0
           ? t(`已删除 ${result.deleted} 条，${rejected} 条被跳过：${result.rejected[0]}`)
-          : t(`已删除 ${result.deleted} 条记录`),
-      );
+          : t(`已删除 ${result.deleted} 条记录`);
+
+      // 正在传的那几条是先暂停、再取消、清半成品后才删掉的，得让用户知道发生过什么
+      onDone(cancelled > 0 ? base + t(`（${cancelled} 条正在传输，已取消）`) : base);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -1679,7 +2320,6 @@ function DeleteTransfersDialog({
       tone="danger"
       icon={<Icon name="trash" />}
       title={batchName ? t(`删除「${batchName}」的 ${count} 个文件`) : t(`删除 ${count} 条传输记录`)}
-      description={t('只删记录和本机收到的文件；手机上的原件、电脑发出的原文件都不动。')}
       actions={
         <>
           <Button variant="ghost" onClick={onClose} disabled={busy}>
@@ -1700,11 +2340,6 @@ function DeleteTransfersDialog({
         />
         {t(`同时删除接收到的文件（${receivedFiles} 个）`)}
       </label>
-      <div style={{ font: '450 12px/1.5 var(--ok-font)', color: 'var(--ok-text-3)', marginTop: 6 }}>
-        {receivedFiles === 0
-          ? t('所选记录里没有本机收到的文件。')
-          : t('只删手机传过来、已经落到本机的文件；本机发出去的原文件不会被删除。')}
-      </div>
       {error && (
         <div style={{ font: '450 12.5px/1.5 var(--ok-font)', color: 'var(--ok-danger-text)', marginTop: 8 }}>
           {error}
@@ -2201,7 +2836,7 @@ export function FilesPage({
    * "每个目录只进一次"——SAF 个别提供方确实会给出环路或重复路径。
    */
   const collectFolderFiles = async (folder: DeviceEntry) => {
-    const files: { sourcePath: string; targetDir: string; label: string }[] = [];
+    const files: { sourcePath: string; targetDir: string; label: string; size: number }[] = [];
     let truncated = false;
     let cyclic = false;
 
@@ -2228,7 +2863,7 @@ export function FilesPage({
         }
 
         if (!item.isDirectory) {
-          files.push({ sourcePath: item.relativePath, targetDir, label: item.name });
+          files.push({ sourcePath: item.relativePath, targetDir, label: item.name, size: item.sizeBytes });
           continue;
         }
 
@@ -2259,13 +2894,22 @@ export function FilesPage({
       return;
     }
 
-    const tasks: { sourcePath: string; displayName: string; targetDir?: string }[] = [];
+    // size 必须带：下面按落点目录汇总 batchTotalBytes，漏了就是
+    // `0 + undefined = NaN`，JSON 序列化成 null，手机端进度分母直接退回旧逻辑。
+    const tasks: { sourcePath: string; displayName: string; targetDir?: string; size: number }[] = [];
     const failures: string[] = [];
     let folders = 0;
 
+    // 传输记录里只有 deviceName，没有 deviceId，所以计划总量也只能按名字做键
+    const deviceName = devices.data?.paired.find((d) => d.deviceId === deviceId)?.name ?? '';
+
     for (const entry of targets) {
       if (!entry.isDirectory) {
-        tasks.push({ sourcePath: entry.relativePath, displayName: entry.name });
+        tasks.push({
+          sourcePath: entry.relativePath,
+          displayName: entry.name,
+          size: entry.sizeBytes,
+        });
         continue;
       }
 
@@ -2274,11 +2918,23 @@ export function FilesPage({
       setActionBusy(t(`正在读取「${entry.name}」…`));
       try {
         const result = await collectFolderFiles(entry);
+
+        // 记下这批的"计划总量"：界面上「传输中」只会看到已建出来的那几个任务，
+        // 没有这个数字就会显示成「17/17 · 100%」还挂着"传输中"。
+        if (result.files.length > 0 && deviceName) {
+          writeBatchPlan(`${deviceName}:${entry.name}`, {
+            total: result.files.length,
+            totalBytes: result.files.reduce((sum, file) => sum + file.size, 0),
+            at: Date.now(),
+          });
+        }
+
         for (const file of result.files) {
           tasks.push({
             sourcePath: file.sourcePath,
             displayName: file.label,
             targetDir: file.targetDir,
+            size: file.size,
           });
         }
 
@@ -2303,6 +2959,21 @@ export function FilesPage({
 
     let ok = 0;
     let index = 0;
+
+    // 每个落点目录本批共多少个文件。手机端按 `relativePath` 的第一段分组
+    // （`Screenshots/2024/a.jpg` → `Screenshots`），所以这里也按第一段统计，
+    // 两边的"一批"才是同一个范围；否则子目录会被算成独立的批，进度分母偏小。
+    const topOf = (dir: string | undefined) => (dir ?? '').split('/')[0] ?? '';
+    const totalByTop = new Map<string, number>();
+    // 字节总数一起算：手机端进度条必须按"已传字节 / 整批总字节"走，
+    // 用"已见任务的总大小"当分母会随着任务创建越来越大，进度会往回跳。
+    const totalBytesByTop = new Map<string, number>();
+    tasks.forEach((task) => {
+      const key = topOf(task.targetDir);
+      totalByTop.set(key, (totalByTop.get(key) ?? 0) + 1);
+      totalBytesByTop.set(key, (totalBytesByTop.get(key) ?? 0) + task.size);
+    });
+
     for (const task of tasks) {
       index += 1;
       setActionBusy(t(`正在交给手机 ${index}/${tasks.length}`));
@@ -2320,6 +2991,11 @@ export function FilesPage({
           sourcePath: task.sourcePath,
           displayName: task.displayName,
           destinationPath: task.targetDir,
+          // 手机只执行单个作业，不知道整批有多少个；不给这个数，
+          // 它就只能显示"已建出来几条"，看起来是 100% 还在传、数量一直在加。
+          batchTotal: totalByTop.get(topOf(task.targetDir)) ?? 0,
+          batchTotalBytes: totalBytesByTop.get(topOf(task.targetDir)) ?? 0,
+          batchName: topOf(task.targetDir),
         });
         ok += 1;
       } catch (caught) {
@@ -3050,15 +3726,6 @@ function Ring({ pct }: { pct: number }) {
 
 /* ===================== 共享目录 ===================== */
 
-/** 只看不选：给色板画出每个预设的真实颜色。 */
-const ACCENT_HEX: Record<string, string> = {
-  pink: '#E2557B',
-  orange: '#E4762C',
-  amber: '#D89B1B',
-  blue: '#2E7BFF',
-  violet: '#7C5CE6',
-};
-
 // 同样只存中文，渲染时再 t()：模块级求值会冻住启动时的语言
 const PERMISSION_OPTIONS = [
   { label: '只读', value: 3 },
@@ -3514,8 +4181,10 @@ function AddRootDialog({
 export function SettingsPage({ initialTab = t('常规') }: { initialTab?: string }) {
   const [tab, setTab] = useState(initialTab);
   const settings = useApi<SettingsSnapshot>('/settings', 0);
-  const { resolvedTheme, setTheme, accent, setAccent } = useOink();
+  const { resolvedTheme, setTheme } = useOink();
   const action = useAction();
+  // 诊断包默认隐藏文件名：用户往往是要把它发给别人看，默认就该是能安全分享的
+  const [withNames, setWithNames] = useState(false);
 
   const tabs = [t('常规'), t('连接'), t('传输'), t('外观'), t('高级')];
 
@@ -3681,23 +4350,6 @@ export function SettingsPage({ initialTab = t('常规') }: { initialTab?: string
                   ))}
                 </div>
               </div>
-              <div className="wc-field">
-                <span className="wc-info__label" style={{ width: 72 }}>
-                  {t('强调色')}
-                </span>
-                <div className="wc-swatches">
-                  {ACCENTS.map((key) => (
-                    <button
-                      key={key}
-                      className="wc-swatch"
-                      data-on={accent === key}
-                      style={{ background: ACCENT_HEX[key] }}
-                      aria-label={key}
-                      onClick={() => setAccent(key)}
-                    />
-                  ))}
-                </div>
-              </div>
             </section>
           )}
 
@@ -3712,6 +4364,40 @@ export function SettingsPage({ initialTab = t('常规') }: { initialTab?: string
                   <span className="wc-info__label">{t('调试接口')}</span>
                   <span className="wc-info__value wc-info__value--muted">{t('/app/api（仅 loopback + 本机令牌）')}</span>
                 </div>
+                <div className="wc-info__row">
+                  <span className="wc-info__label">{t('诊断包')}</span>
+                  <span className="wc-info__value wc-info__value--muted">
+                    {t('版本、状态、最近日志与请求统计')}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={action.busy}
+                    onClick={() =>
+                      action.run(
+                        () =>
+                          download(
+                            `/diagnostics/bundle${withNames ? '?includeNames=true' : ''}`,
+                            'wirelesscable-diag.zip',
+                          ),
+                        t('诊断包已导出'),
+                      )
+                    }
+                  >
+                    {t('导出')}
+                  </Button>
+                </div>
+              </div>
+              <label className="wc-checkline" style={{ marginTop: 10 }}>
+                <input
+                  type="checkbox"
+                  checked={withNames}
+                  onChange={(event) => setWithNames(event.target.checked)}
+                />
+                {t('包含文件名（默认隐藏）')}
+              </label>
+              <div className="wc-field__hint">
+                {t('设备名会被替换成编号。分享前自己过一遍。')}
               </div>
               <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
                 <Button variant="soft" size="sm" disabled={!isDesktop()} onClick={() => action.run(() => openPath(data?.receivedDirectory ?? ''), t('已打开接收目录'))}>

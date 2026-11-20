@@ -13,6 +13,9 @@ namespace WirelessCable.Server.Pairing;
 /// </summary>
 public sealed class QrPairingService
 {
+    /// <summary>Windows 移动热点的默认网段前缀。</summary>
+    private const string DefaultHotspotPrefix = "192.168.137.";
+
     private readonly ConcurrentDictionary<string, DateTimeOffset> _nonces = new(StringComparer.Ordinal);
 
     /// <summary>生成新的二维码负载（内含一次性随机数）。</summary>
@@ -22,7 +25,8 @@ public sealed class QrPairingService
         IReadOnlyList<string> addresses,
         int port,
         string fingerprint,
-        QrHotspotDto? hotspot = null)
+        QrHotspotDto? hotspot = null,
+        bool dropStaleHotspotSubnet = false)
     {
         Purge();
 
@@ -35,7 +39,7 @@ public sealed class QrPairingService
             Version = ProtocolConstants.CurrentVersion,
             DeviceId = deviceId,
             DeviceName = deviceName,
-            Addresses = ExcludeHotspot(addresses, hotspot?.Address),
+            Addresses = ExcludeHotspot(addresses, hotspot?.Address, dropStaleHotspotSubnet),
             Hotspot = hotspot,
             Port = port,
             Fingerprint = fingerprint,
@@ -51,9 +55,17 @@ public sealed class QrPairingService
     /// 全部连不上才去连热点、再按 hotspot.address 连一次。
     /// 热点地址混进 addresses 会让手机在没连热点时白等一次连接超时。
     /// </summary>
+    /// <param name="dropStaleHotspotSubnet">
+    /// 刚刚**真的关掉了**应用开的热点时才为 true：网卡上的 192.168.137.x 会在系统里
+    /// 多留几秒（实测仍在 addresses 里），那时它一定不可达，留着只会让手机每试一次等满超时。
+    ///
+    /// 不能无条件按网段剔——用户的真实局域网可能就在 192.168.137.0/24
+    /// （Windows 热点的默认网段，但也能被路由器用），或者他自个儿开的热点还开着。
+    /// </param>
     public static IReadOnlyList<string> ExcludeHotspot(
         IReadOnlyList<string> addresses,
-        string? hotspotAddress)
+        string? hotspotAddress,
+        bool dropStaleHotspotSubnet = false)
     {
         var result = new List<string>(addresses.Count);
 
@@ -66,6 +78,12 @@ public sealed class QrPairingService
 
             if (!string.IsNullOrWhiteSpace(hotspotAddress)
                 && string.Equals(address, hotspotAddress, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (dropStaleHotspotSubnet
+                && address.StartsWith(DefaultHotspotPrefix, StringComparison.Ordinal))
             {
                 continue;
             }

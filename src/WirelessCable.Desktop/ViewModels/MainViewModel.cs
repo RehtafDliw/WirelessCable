@@ -45,6 +45,9 @@ public sealed class MainViewModel : ViewModelBase
     private bool _hasDevices;
     private bool _hasActiveTransfer;
 
+    /// <summary>最近一次"确实有任务在跑"的时间，用来给角标加宽限（见 ApplySnapshot）。</summary>
+    private DateTimeOffset _lastActiveTransferAt;
+
     public MainViewModel(
         WirelessCableServer server,
         IAppPaths paths,
@@ -978,7 +981,17 @@ public sealed class MainViewModel : ViewModelBase
         OnPropertyChanged(nameof(AppVersionText));
         OnPropertyChanged(nameof(ProtocolVersionText));
 
-        HasActiveTransfer = Transfers.HasActive;
+        // 电脑是逐条下发作业的（一次 8 个）：一批全做完、下一批还没到的那一两秒里
+        // 没有任何"进行中"的任务，角标会灭一下再亮——任务栏上看着一闪一闪。
+        // 给 8 秒宽限：最近动过就一直亮，真正停下来 8 秒后才灭。
+        var transferActive = Transfers.HasActive;
+        if (transferActive)
+        {
+            _lastActiveTransferAt = DateTimeOffset.UtcNow;
+        }
+
+        HasActiveTransfer = transferActive
+            || DateTimeOffset.UtcNow - _lastActiveTransferAt < TimeSpan.FromSeconds(8);
 
         if (HasDeviceActionHint && DateTimeOffset.UtcNow > _deviceActionHintUntil)
         {
@@ -1164,34 +1177,57 @@ public sealed class MainViewModel : ViewModelBase
                 return;
             }
 
-            QrStatusText = "正在准备热点…";
-
-            var offer = await _hotspot.EnsureStartedAsync();
-
+            // 热点是可选项（新版出码对话框里的勾选框，存在 settings.json）。
+            // 不开时手机必须和电脑在同一网络——常规场景本来就是这样；而开热点在
+            // "电脑靠 Wi-Fi 上网 + 网卡不支持 STA+AP 并发"时会把电脑自己踢下线。
+            var wantHotspot = DesktopSettingsStore.Load().HotspotOnPairing;
             QrHotspotDto? hotspot = null;
-            if (offer is null)
+
+            // 上次留在界面上的"有效期 12 秒"必须先盖掉，否则不开热点时会一直显示旧倒计时
+            QrStatusText = wantHotspot ? "正在准备热点…" : "正在生成…";
+
+            if (wantHotspot)
             {
-                IsHotspotActive = false;
-                HotspotText = _hotspot.QueryState() == HotspotState.Unsupported
-                    ? "无法开热点：电脑需要一个可共享的网络（网线或 Wi-Fi）"
-                    : "电脑热点开启失败，手机可连同一 Wi-Fi";
+                var offer = await _hotspot.EnsureStartedAsync();
+
+                if (offer is null)
+                {
+                    IsHotspotActive = false;
+                    HotspotText = _hotspot.QueryState() == HotspotState.Unsupported
+                        ? "无法开热点：电脑需要一个可共享的网络（网线或 Wi-Fi）"
+                        : "电脑热点开启失败，手机可连同一 Wi-Fi";
+                }
+                else
+                {
+                    IsHotspotActive = true;
+                    HotspotText = $"备用热点 {offer.Ssid} · 密码 {offer.Passphrase}";
+
+                    // 地址还没就绪时不写进二维码：手机端会先连热点再按地址访问，
+                    // 空地址会让它连上热点却不知道连谁。
+                    if (!string.IsNullOrWhiteSpace(offer.Address))
+                    {
+                        hotspot = new QrHotspotDto
+                        {
+                            Ssid = offer.Ssid,
+                            Passphrase = offer.Passphrase,
+                            Address = offer.Address!,
+                        };
+                    }
+                    else
+                    {
+                        // 这张码里没有热点地址，手机扫码不会走热点。必须让用户知道要重试。
+                        HotspotText = $"备用热点 {offer.Ssid} · 密码 {offer.Passphrase}（地址未就绪，请重新生成）";
+                    }
+                }
             }
             else
             {
-                IsHotspotActive = true;
-                HotspotText = $"备用热点 {offer.Ssid} · 密码 {offer.Passphrase}";
-
-                // 地址还没就绪时不写进二维码：手机端会先连热点再按地址访问，
-                // 空地址会让它连上热点却不知道连谁。
-                if (!string.IsNullOrWhiteSpace(offer.Address))
-                {
-                    hotspot = new QrHotspotDto
-                    {
-                        Ssid = offer.Ssid,
-                        Passphrase = offer.Passphrase,
-                        Address = offer.Address!,
-                    };
-                }
+                // 只有"应用自己开的"才能关，也才值得显示可关状态；
+                // 用户在系统设置里自己开的热点我们既读不回密码，也不该去动。
+                IsHotspotActive = _hotspot.StartedByUs;
+                HotspotText = _hotspot.StartedByUs
+                    ? "热点已开启"
+                    : "未开启热点，手机需与电脑在同一网络";
             }
 
             var qr = _server.CreatePairingQr(hotspot);
@@ -1263,11 +1299,32 @@ public sealed class MainViewModel : ViewModelBase
         return offer;
     }
 
-    private async Task StopHotspotAsync()
+    private async Task<bool> StopHotspotAsync()
     {
-        await _hotspot.StopAsync();
+        var stopped = await _hotspot.StopAsync();
         IsHotspotActive = false;
         HotspotText = "热点已关闭";
+        return stopped;
+    }
+
+    /// <summary>
+    /// 新版界面在出码对话框里取消勾选时关热点。
+    ///
+    /// 走 ViewModel 是为了让旧界面的热点状态跟着变（两套界面看同一份状态），
+    /// 但调用方是 ASP.NET 的请求线程——改绑定属性必须 marshal 回 UI 线程，
+    /// 否则 PropertyChanged 在线程池线程触发，旧界面会抛"调用线程无法访问此对象"。
+    ///
+    /// 返回值是"这次真的关掉了吗"：出码端据此剔除残留的热点网段地址。
+    /// </summary>
+    public Task<bool> StopHotspotForQrAsync()
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.CheckAccess())
+        {
+            return StopHotspotAsync();
+        }
+
+        return dispatcher.InvokeAsync(StopHotspotAsync).Task.Unwrap();
     }
 
     /// <summary>退出时收尾：只关应用自己开的热点，用户手动开的保留。</summary>

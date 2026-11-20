@@ -57,7 +57,9 @@ class TransferBatchRowTest {
         assertEquals(2, rows.size)
 
         val batch = rows.filterIsInstance<TransferRow.Batch>().single()
-        assertEquals("batch:b1", batch.key)
+        // key 带首条 taskId：同一目录可以有多批（昨天 128 张 + 今天 330 张），
+        // 只用 batchId 会让 LazyColumn 的 key 冲突
+        assertTrue(batch.key.startsWith("batch:b1#"))
         assertEquals("照片", batch.name)
         assertEquals(3, batch.fileCount)
         assertEquals(listOf("t1", "t2", "t3"), batch.taskIds)
@@ -87,7 +89,7 @@ class TransferBatchRowTest {
     }
 
     @Test
-    fun `两个页签各自只算自己那一半`() {
+    fun `还有在传的批整批留在传输中`() {
         val items = listOf(
             download("done", batchId = "b1", state = TransferStates.COMPLETED),
             download("live", batchId = "b1", state = TransferStates.TRANSFERRING),
@@ -96,9 +98,24 @@ class TransferBatchRowTest {
         val active = TransferUiState(items = items, tab = TransferTab.ACTIVE).rows
         val completed = TransferUiState(items = items, tab = TransferTab.COMPLETED).rows
 
-        // 同一批跨了两个页签：各自只看得到自己这一半，行数都是 1
-        assertEquals(listOf("live"), (active.single() as TransferRow.Batch).taskIds)
-        assertEquals(listOf("done"), (completed.single() as TransferRow.Batch).taskIds)
+        // 一批 330 个传完 300 个时，这一行要留在「传输中」并显示 300/330。
+        // 拆成两半会让用户在两个页签各看到一行，以为传了两批。
+        assertEquals(listOf("done", "live"), (active.single() as TransferRow.Batch).taskIds)
+        assertTrue(completed.isEmpty())
+    }
+
+    @Test
+    fun `整批完成才进已完成`() {
+        val items = listOf(
+            download("a", batchId = "b1", state = TransferStates.COMPLETED),
+            download("b", batchId = "b1", state = TransferStates.COMPLETED),
+        )
+
+        val active = TransferUiState(items = items, tab = TransferTab.ACTIVE).rows
+        val completed = TransferUiState(items = items, tab = TransferTab.COMPLETED).rows
+
+        assertTrue(active.isEmpty())
+        assertEquals(listOf("a", "b"), (completed.single() as TransferRow.Batch).taskIds)
     }
 
     @Test

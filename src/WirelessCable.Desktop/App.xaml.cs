@@ -184,6 +184,15 @@ public partial class App : Application
                 ? "无法开热点：电脑需要一个可共享的网络（网线或 Wi-Fi）"
                 : "电脑热点开启失败，手机可连同一 Wi-Fi";
 
+        // 取消勾选就关掉应用开的热点（用户在系统里自己开的不动）
+        _server.HotspotBridge.StopAsync = () => _viewModel.StopHotspotForQrAsync();
+
+        // 「出码时开热点」的偏好存在 settings.json 里：新版界面的勾选框、旧界面的出码
+        // 读的是同一个值，不会出现"新版勾了、旧版不开"。
+        _server.HotspotBridge.ReadPreference = () => DesktopSettingsStore.Load().HotspotOnPairing;
+        _server.HotspotBridge.WritePreference = value =>
+            DesktopSettingsStore.Update(settings => settings.HotspotOnPairing = value);
+
         var window = new MainWindow { DataContext = _viewModel };
         MainWindow = window;
 

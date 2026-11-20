@@ -67,9 +67,21 @@ public static class ProtocolConstants
     /// 下载整个文件夹会一次入队几百个下载作业；全发下去的话手机只能逐个执行，
     /// 排在后面的会一直等到 <see cref="JobReportTimeoutSeconds"/> 被判定超时
     /// （实测 330 张图：完成 194 个，其余 136 个 job_timeout）。
-    /// 改成小批取、取完再取下一批，每个作业"取走→回报"的间隔就很短。
+    ///
+    /// 3 是"租约 + 心跳"之后的上限：手机取走作业时领 <see cref="JobLeaseSeconds"/> 秒租约，
+    /// 执行期间每 <see cref="JobLeaseHeartbeatSeconds"/> 秒续一次；服务端一暂停/取消，
+    /// 续约就会失败，手机立刻停手。没有租约时只能设成 1（取走就失控）。
     /// </summary>
-    public const int MaxJobsPerPoll = 8;
+    public const int MaxJobsPerPoll = 3;
+
+    /// <summary>
+    /// 作业租约时长（秒）。手机取走作业时生效，执行期间每 8 秒续一次。
+    /// 30 秒足够扛住一次网络抖动；过期后作业按超时规则回收。
+    /// </summary>
+    public const int JobLeaseSeconds = 30;
+
+    /// <summary>手机续租间隔（秒）。必须明显小于 <see cref="JobLeaseSeconds"/>。</summary>
+    public const int JobLeaseHeartbeatSeconds = 8;
 
     /// <summary>分块内容的 SHA-256 请求/响应头（上传必带，下载必回）。</summary>
     public const string ChunkSha256Header = "X-WC-Chunk-Sha256";
@@ -83,8 +95,14 @@ public static class ProtocolConstants
     /// <summary>任务列表 / 单个任务 / 子资源的前缀。</summary>
     public const string TransferTasksPath = ApiPrefix + "/transfer/tasks";
 
-    /// <summary>单次最多删除多少条传输记录（多选清理，200 条足够）。</summary>
-    public const int MaxDeleteTransferRecords = 200;
+    /// <summary>
+    /// 单次最多删除多少条传输记录。
+    ///
+    /// 原来定的 200 是按"多选清理"估的，但整文件夹传输一次就是几百条：
+    /// 选中一个 330 文件的批次点删除，只有前 200 条被删，剩下的留在列表里，
+    /// 用户会以为"删了又回来了"。按单批上限（1000）+ 余量给到 5000。
+    /// </summary>
+    public const int MaxDeleteTransferRecords = 5000;
 
     /// <summary>单次请求允许的最大 JSON 体积。</summary>
     public const int MaxJsonBodyBytes = 1024 * 1024;
@@ -130,6 +148,13 @@ public static class ProtocolConstants
 
     /// <summary>手机取待执行作业。</summary>
     public const string FileDeviceJobsPath = ApiPrefix + "/fs/device/jobs";
+
+    /// <summary>
+    /// 整批暂停/恢复队列里还没执行的作业。
+    /// 整文件夹传输时，文件是逐个下发、逐个执行的；只暂停已建出来的传输任务，
+    /// 队列里剩下的会继续被取走——用户看到的就是"按了暂停还在传"。
+    /// </summary>
+    public const string FileDeviceJobsControlPath = ApiPrefix + "/fs/device/jobs/control";
 
     /// <summary>配对码位数。</summary>
     public const int PairingCodeLength = 6;

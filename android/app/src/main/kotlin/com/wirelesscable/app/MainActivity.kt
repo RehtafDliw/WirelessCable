@@ -170,18 +170,23 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** 正在等用户选落点的"整文件夹"批次。 */
-    private var pendingFolderBatch: FolderDownloadResult? = null
+    /** 正在等用户选落点的"整文件夹"：**先选落点，再让服务端展开**。 */
+    private var pendingFolderEntry: com.wirelesscable.app.core.protocol.FileEntryDto? = null
 
     /** 整文件夹下载的落点选择器（选目录树，保留子目录结构）。 */
     private val folderBatchPicker = registerForActivityResult(
         ActivityResultContracts.OpenDocumentTree(),
     ) { uri ->
-        val batch = pendingFolderBatch
-        pendingFolderBatch = null
-        if (uri == null || batch == null) return@registerForActivityResult
+        val entry = pendingFolderEntry
+        pendingFolderEntry = null
+        if (uri == null || entry == null) return@registerForActivityResult
 
-        transferViewModel.saveFolderBatch(batch.batchName, batch.tasks, uri)
+        // 选完落点才开始展开。展开是服务端递归列目录 + 逐条建任务，
+        // 几千个文件要 4–10 秒（真机实测）；以前是先展开再弹选择器，
+        // 用户点完「下载到手机」干等十几秒，看起来像没反应。
+        fileBrowserViewModel.downloadFolder(entry) { batch ->
+            transferViewModel.saveFolderBatch(batch.batchName, batch.tasks, uri)
+        }
     }
 
     /** 批量下载的目标目录选择器。 */
@@ -274,11 +279,9 @@ class MainActivity : ComponentActivity() {
                         batchDirectoryPicker.launch(null)
                     },
                     onDownloadFolder = { entry ->
-                        // 两步：先让服务端把文件夹展开成一批任务，再让用户选落点
-                        fileBrowserViewModel.downloadFolder(entry) { batch ->
-                            pendingFolderBatch = batch
-                            folderBatchPicker.launch(null)
-                        }
+                        // 先弹落点选择器，选完再展开（展开要十几秒，见 folderBatchPicker）
+                        pendingFolderEntry = entry
+                        folderBatchPicker.launch(null)
                     },
                     onUploadHere = {
                         uploadPicker.launch(

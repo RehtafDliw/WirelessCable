@@ -43,6 +43,8 @@ import com.wirelesscable.app.core.protocol.TransferStates
 import com.wirelesscable.app.core.transfer.TransferFormat
 import com.wirelesscable.app.core.transfer.TransferItem
 import com.wirelesscable.app.ui.components.CheckIcon
+import com.wirelesscable.app.ui.components.CloseIcon
+import com.wirelesscable.app.ui.components.WcSelectionMark
 import com.wirelesscable.app.ui.components.PauseIcon
 import com.wirelesscable.app.ui.components.PlayIcon
 import com.wirelesscable.app.ui.components.RefreshIcon
@@ -96,12 +98,21 @@ fun TransfersScreen(
     onSelectAll: () -> Unit,
     onClearSelection: () -> Unit,
     onDeleteRecords: (Boolean) -> Unit,
+    /** 「传输已被接收方取消」的询问：true = 删掉本机这条记录，false = 只是关掉提示。 */
+    onResolvePeerCancelled: (Boolean) -> Unit,
+    /** 行上的「取消」确认后：作废队列、删记录，[Boolean] = 是否连已落盘的文件一起删。 */
+    onDeleteCancelled: (List<String>, Boolean) -> Unit,
     onOpenSaved: (String) -> Unit,
     onRetryReceive: (List<String>) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var confirmingDelete by remember { mutableStateOf(false) }
     var deleteFiles by remember { mutableStateOf(false) }
+
+    // 行上的「取消」：点了先把任务停住再弹确认——
+    // 用户还在犹豫的时候文件继续往电脑上流，是这段交互最容易出问题的地方。
+    var cancelTarget by remember { mutableStateOf<TransferRow?>(null) }
+    var cancelWithFiles by remember { mutableStateOf(false) }
 
     val active = state.tab == TransferTab.ACTIVE
     // 同一次「下载整个文件夹」的任务在 state 里已经收成一行了，这里直接用
@@ -223,6 +234,11 @@ fun TransfersScreen(
                                 onPause = { onPause(row.taskIds) },
                                 onResume = { onResume(row.taskIds) },
                                 onRetry = { onRetryReceive(row.taskIds) },
+                                onCancel = {
+                                    onPause(row.taskIds)
+                                    cancelTarget = row
+                                    cancelWithFiles = false
+                                },
                                 inboxBlocked = state.inboxBlocked,
                             )
 
@@ -244,6 +260,11 @@ fun TransfersScreen(
                                 onPause = { onPause(row.taskIds) },
                                 onResume = { onResume(row.taskIds) },
                                 onRetry = { onRetryReceive(row.taskIds) },
+                                onCancel = {
+                                    onPause(row.taskIds)
+                                    cancelTarget = row
+                                    cancelWithFiles = false
+                                },
                                 inboxBlocked = state.inboxBlocked,
                             )
                         }
@@ -281,16 +302,92 @@ fun TransfersScreen(
                         color = WcColors.Error,
                     )
                 }
-                WcLinkButton(
-                    text = Str.t("删除"),
-                    onClick = {
-                        deleteFiles = false
-                        confirmingDelete = true
-                    },
-                    color = WcColors.Error,
-                )
+                // **传输中的条目只给「取消」，不给「删除记录」**（需求 4）：
+                // 选中的行全都在传的话，这个按钮直接不出现。删记录是"清理历史"，
+                // 而传输中的条目只有"取消传输"一个动作，两个放一起容易点错。
+                // 电脑端是同样的做法（传输中的整批菜单里不出现删除项）。
+                val allInFlight = state.selectedRows.isNotEmpty() &&
+                    state.selectedRows.all { row -> row.isActive }
+
+                if (!allInFlight) {
+                    WcLinkButton(
+                        text = Str.t("删除"),
+                        onClick = {
+                            deleteFiles = false
+                            confirmingDelete = true
+                        },
+                        color = WcColors.Error,
+                    )
+                }
             }
         }
+    }
+
+    // 行上的「取消」：点按钮的那一刻已经暂停了，这里只决定"删掉"还是"继续"。
+    // 关掉弹窗（点外面/返回）等同于继续——用户没有明确说要删，就不能替他删。
+    cancelTarget?.let { target ->
+        val isBatch = target is TransferRow.Batch
+        WcDialog(
+            onDismissRequest = {
+                onResume(target.taskIds)
+                cancelTarget = null
+            },
+            title = { Text(Str.t(if (isBatch) "取消这批传输？" else "取消这个传输？")) },
+            text = {
+                Column {
+                    Text(
+                        text = Str.t("任务已暂停。点「确定」删除记录，点「取消」继续传输。"),
+                        fontSize = 13.sp,
+                        color = WcColors.Text,
+                    )
+                    if (isBatch) {
+                        Spacer(Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { cancelWithFiles = !cancelWithFiles },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            WcSelectionMark(checked = cancelWithFiles)
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = Str.t("同时删除已完成的文件"),
+                                fontSize = 13.sp,
+                                color = WcColors.Text,
+                            )
+                        }
+                        Text(
+                            text = Str.t("只删本机已经收到的；没传完的会一起作废。"),
+                            fontSize = 11.5.sp,
+                            color = WcColors.Muted,
+                            modifier = Modifier.padding(start = 26.dp),
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val ids = target.taskIds
+                        val withFiles = isBatch && cancelWithFiles
+                        cancelTarget = null
+                        onDeleteCancelled(ids, withFiles)
+                    },
+                ) {
+                    Text(Str.t("确定"), color = WcColors.Error)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        onResume(target.taskIds)
+                        cancelTarget = null
+                    },
+                ) {
+                    Text(Str.t("取消"))
+                }
+            },
+        )
     }
 
     if (confirmingDelete) {
@@ -328,12 +425,6 @@ fun TransfersScreen(
                                 color = WcColors.Text,
                             )
                         }
-                        Text(
-                            text = Str.t("只删本机收到的文件。发出去的文件在电脑上，不会被删除；全选时若含发出去的记录，也只删记录。"),
-                            fontSize = 11.5.sp,
-                            color = WcColors.Muted,
-                            modifier = Modifier.padding(start = 4.dp),
-                        )
                     }
                 }
             },
@@ -349,6 +440,31 @@ fun TransfersScreen(
             },
             dismissButton = {
                 TextButton(onClick = { confirmingDelete = false }) { Text(Str.t("取消")) }
+            },
+        )
+    }
+
+    // 点「继续」才发现对面已经删了这条（删除会先暂停再取消）。
+    // 以前这里只有一句"任务已结束"，行留在列表里、永远传不动；
+    // 现在问一句要不要把本机记录也清掉。
+    if (state.peerCancelled.isNotEmpty()) {
+        WcDialog(
+            onDismissRequest = { onResolvePeerCancelled(false) },
+            title = { Text(Str.t("传输已被接收方取消")) },
+            text = {
+                Text(
+                    text = Str.t("这条传输已经被对方删除，继续也不会再传。要删掉本机的这条记录吗？"),
+                    fontSize = 13.sp,
+                    color = WcColors.Text,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { onResolvePeerCancelled(true) }) {
+                    Text(Str.t("删除记录"), color = WcColors.Error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { onResolvePeerCancelled(false) }) { Text(Str.t("保留记录")) }
             },
         )
     }
@@ -387,6 +503,7 @@ private fun TransferItemRow(
     onPause: () -> Unit,
     onResume: () -> Unit,
     onRetry: () -> Unit,
+    onCancel: () -> Unit,
     inboxBlocked: Boolean,
 ) {
     val completed = item.state == TransferStates.COMPLETED
@@ -470,8 +587,18 @@ private fun TransferItemRow(
         Spacer(Modifier.width(WcSpace.s2))
 
         when {
-            item.isActive -> WcRowAction(PauseIcon, onPause, contentDescription = Str.t("暂停"))
-            paused -> WcRowAction(PlayIcon, onResume, contentDescription = Str.t("继续"))
+            item.isActive -> {
+                WcRowAction(PauseIcon, onPause, contentDescription = Str.t("暂停"))
+                Spacer(Modifier.width(2.dp))
+                WcRowAction(CloseIcon, onCancel, contentDescription = Str.t("取消"))
+            }
+
+            paused -> {
+                WcRowAction(PlayIcon, onResume, contentDescription = Str.t("继续"))
+                Spacer(Modifier.width(2.dp))
+                WcRowAction(CloseIcon, onCancel, contentDescription = Str.t("取消"))
+            }
+
             item.needsSave && item.state == TransferStates.FAILED ->
                 WcRowAction(RefreshIcon, onRetry, contentDescription = Str.t("重试"))
         }
@@ -525,11 +652,17 @@ private fun TransferBatchRow(
     onPause: () -> Unit,
     onResume: () -> Unit,
     onRetry: () -> Unit,
+    onCancel: () -> Unit,
     inboxBlocked: Boolean,
 ) {
     val allDone = group.completedCount == group.fileCount
     val paused = group.allPaused
     val failed = group.allFailed
+
+    // 暂停键的显示条件不能用 `isActive`：电脑每次只下发 8 个作业，一个都做完、
+    // 下一批还没到的那一两秒里整批没有"进行中"的条目，键会消失再出现，
+    // 边界文件一多就看着一直在闪。改成"还没传完 + 最近 8 秒动过"，跨过下发间隙。
+    val showPause = !paused && (group.isActive || (!allDone && group.isLive(System.currentTimeMillis())))
     val tint = when {
         allDone -> WcColors.Success
         failed -> WcColors.Error
@@ -601,8 +734,18 @@ private fun TransferBatchRow(
         Spacer(Modifier.width(WcSpace.s2))
 
         when {
-            group.isActive && !paused -> WcRowAction(PauseIcon, onPause, contentDescription = Str.t("暂停整批"))
-            paused -> WcRowAction(PlayIcon, onResume, contentDescription = Str.t("继续整批"))
+            showPause -> {
+                WcRowAction(PauseIcon, onPause, contentDescription = Str.t("暂停整批"))
+                Spacer(Modifier.width(2.dp))
+                WcRowAction(CloseIcon, onCancel, contentDescription = Str.t("取消整批"))
+            }
+
+            paused -> {
+                WcRowAction(PlayIcon, onResume, contentDescription = Str.t("继续整批"))
+                Spacer(Modifier.width(2.dp))
+                WcRowAction(CloseIcon, onCancel, contentDescription = Str.t("取消整批"))
+            }
+
             failed -> WcRowAction(RefreshIcon, onRetry, contentDescription = Str.t("重试整批"))
         }
     }
@@ -624,7 +767,13 @@ private fun TransferRow.Batch.metaLine(inboxBlocked: Boolean): String {
     } else {
         Str.t("已完成 $completedCount/$fileCount 个文件")
     }
-    parts += TransferFormat.bytes(totalBytes)
+    // 有整批总量时写成「已传 / 总共」，和进度条同一个分母；
+    // 没有就退回已见条目的总大小（老数据）。
+    parts += if (plannedBytes > 0L) {
+        "${TransferFormat.bytes(transferredBytes)} / ${TransferFormat.bytes(plannedBytes)}"
+    } else {
+        TransferFormat.bytes(totalBytes)
+    }
 
     if (isActive && !allPaused && bytesPerSecond > 0L) {
         parts += TransferFormat.speed(bytesPerSecond)

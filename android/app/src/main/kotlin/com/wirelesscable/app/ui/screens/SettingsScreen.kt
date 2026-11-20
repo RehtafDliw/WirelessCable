@@ -46,6 +46,7 @@ import com.wirelesscable.app.core.files.AllFilesProvider
 import com.wirelesscable.app.core.protocol.FileProtocol
 import com.wirelesscable.app.core.protocol.FileRootDto
 import com.wirelesscable.app.ui.components.DetailRow
+import com.wirelesscable.app.ui.components.DiagnosticsDialog
 import com.wirelesscable.app.ui.components.SessionSyncCard
 import com.wirelesscable.app.ui.components.StatusPill
 import com.wirelesscable.app.ui.components.Tone
@@ -106,6 +107,7 @@ fun SettingsScreen(
 ) {
     var advanced by remember { mutableStateOf(false) }
     var grantingDevice by remember { mutableStateOf<String?>(null) }
+    var showDiagnostics by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
     Column(
@@ -352,10 +354,24 @@ fun SettingsScreen(
                     Spacer(Modifier.height(8.dp))
                     Text(text = Str.t(raw), color = WcColors.Error, fontSize = 12.5.sp)
                 }
+
+                // 连不上时先跑一遍诊断，比让用户猜"是电脑没开还是网络不对"快得多
+                Spacer(Modifier.height(10.dp))
+                WcLinkButton(
+                    text = Str.t("连接诊断"),
+                    onClick = { showDiagnostics = true },
+                    color = WcColors.Muted,
+                )
             }
         }
 
         Spacer(Modifier.height(12.dp))
+    }
+
+    // 对话框放在 Column 之外：Compose 的 Dialog 不占布局空间，
+    // 塞进滚动容器里会在某些 ROM 上随滚动被裁掉
+    if (showDiagnostics) {
+        DiagnosticsDialog { showDiagnostics = false }
     }
 }
 

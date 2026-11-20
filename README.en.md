@@ -25,7 +25,9 @@ no cloud, no cable, no account.
 - **Browse your PC on the phone**: share a folder from the PC, download it on the phone.
 - **Share sheet integration**: from Gallery, Files or a browser, tap Share → WirelessCable → pick a PC or "direct transfer".
 - **Phone-to-phone**: two phones transfer by scanning a QR code, no PC involved.
-- **Hotspot fallback**: if the phone is not on Wi-Fi, the PC opens a hotspot automatically.
+- **Hotspot fallback**: if the phone is not on Wi-Fi, tick **Use a hotspot** when generating the
+  QR code and the PC opens one for you (off by default — starting a hotspot can knock a Wi-Fi-connected
+  PC offline).
 
 What it does **not** do: no internet relay, no account, no browser extension, and the phone never listens on a port.
 
@@ -36,8 +38,12 @@ What it does **not** do: no internet relay, no account, no browser extension, an
 <img src="docs/screenshots/phone-home.png" width="300" alt="Phone home screen">
 
 Four tabs: **Home** (paired PCs, connection state, send files / scan to pair / direct transfer),
-**Files** (folders shared from the PC plus the phone's inbox), **Transfers** (progress and history,
-pausable), **Settings** (background sync, grants, appearance and language).
+**Files** (folders shared from the PC plus the phone's inbox), **Transfers** (progress and history; pause, resume and cancel stay in sync across both ends,
+and a cancel drops the record on both sides), **Settings** (background sync, grants, appearance
+and language).
+
+The desktop sidebar has **Get the phone app**: the phone downloads and installs the APK straight
+from its browser, no cable needed.
 
 The link is **bidirectional**: the PC can also browse folders the phone has shared, with four permission
 tiers set per folder.
@@ -148,6 +154,7 @@ scripts/                         build, test, package
 | [`docs/en/guide.md`](docs/en/guide.md) | End-user guide (English): install, pair, transfer, FAQ |
 | [`docs/使用指南.md`](docs/使用指南.md) | Same guide in Chinese |
 | [`docs/用户手册.md`](docs/用户手册.md) | Chinese manual with implementation details (troubleshooting) |
+| [`ARCHITECTURE.en.md`](ARCHITECTURE.en.md) | Layers and key decisions ([中文](ARCHITECTURE.md)) |
 | [`ARCHITECTURE.en.md`](ARCHITECTURE.en.md) | Layers and key decisions (中文: [ARCHITECTURE.md](ARCHITECTURE.md)) |
 
 ---

@@ -19,6 +19,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -50,6 +52,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import com.wirelesscable.app.core.i18n.Str
+import com.wirelesscable.app.core.sync.SessionSyncEngine
 import com.wirelesscable.app.ui.components.deviceLabel
 
 /**
@@ -122,9 +125,13 @@ fun HomeScreen(
                 }
             } else {
                 WcCardList {
+                    // 会话状态以引擎为准：配对页那套 sessionState 只在配对流程里更新，
+                    // 换网络后心跳已经通了它还是 disconnected，首页就会写"断开"。
+                    val sync by SessionSyncEngine.state.collectAsStateWithLifecycle()
+
                     pairing.pairedDevices.forEachIndexed { index, device ->
                         if (index > 0) WcRowDivider()
-                        val isCurrent = pairing.isConnected && pairing.sessionDeviceId == device.deviceId
+                        val isCurrent = sync.connected && sync.deviceId == device.deviceId
                         DeviceRow(
                             name = deviceLabel(device.displayName, device.deviceId),
                             meta = when {

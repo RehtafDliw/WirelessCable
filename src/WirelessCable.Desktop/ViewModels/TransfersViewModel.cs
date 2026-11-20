@@ -30,6 +30,15 @@ public sealed class TransfersViewModel : ViewModelBase
     /// <summary>剩余时间估算上限。超过它的估算没有意义，宁可不显示。</summary>
     private const double MaxRemainingSeconds = 99 * 3600;
 
+    /// <summary>
+    /// 服务端列表里已经没有、但本地还显示"在传"的条目，最多豁免多久（毫秒）。
+    ///
+    /// 传输中的任务每传一块都会更新时间戳，所以半分钟没有任何动静，
+    /// 就说明它已经被删除或回收了。超过这个时间还留在列表里，
+    /// 任务栏角标会一直亮着（真机现象）。
+    /// </summary>
+    private const long ActiveGraceMs = 30_000;
+
     private int _tick;
     private TransferTab _tab = TransferTab.Active;
     private bool _busy;
@@ -375,6 +384,12 @@ public sealed class TransfersViewModel : ViewModelBase
     /// <summary>把引擎返回的列表合并进 UI。内存里的会话进度比数据库新，不要被旧快照覆盖。</summary>
     private void Merge(IReadOnlyList<TransferTaskDto> tasks)
     {
+        // **取消的记录两端都不显示**（需求 2）：谁取消的都一样，传输已经终止，
+        // 这条历史没有保留的意义。手机端同样会把本地记录清掉。
+        var visible = tasks
+            .Where(static d => !string.Equals(d.State, TransferStates.Cancelled, StringComparison.Ordinal))
+            .ToArray();
+
         /*
          * 服务端列表是这个页面的唯一真相：已经删掉/被回收的条目必须消失。
          *
@@ -383,20 +398,30 @@ public sealed class TransfersViewModel : ViewModelBase
          * （1.5.8 真机确认：TransferTasks 表 0 行，界面仍显示 23 条已完成 + 7 条失败）。
          *
          * 两个例外不能误删：
-         * 1. 本地正在传的条目——进度比快照新，等服务端状态追上来；
+         * 1. 本地正在传的条目——进度比快照新，等服务端状态追上来（但**不能永远豁免**，
+         *    见下）；
          * 2. 比服务端返回的最旧一条还旧的——接口只给最近 N 条，那些是被截断而非被删除。
          */
-        var remoteIds = tasks.Select(static d => d.TaskId).ToHashSet(StringComparer.Ordinal);
-        var oldestRemote = tasks.Count == 0
+        var remoteIds = visible.Select(static d => d.TaskId).ToHashSet(StringComparer.Ordinal);
+        var oldestRemote = visible.Length == 0
             ? long.MaxValue
-            : tasks.Min(static d => d.UpdatedAtUnixMs);
+            : visible.Min(static d => d.UpdatedAtUnixMs);
+        var staleCutoff = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - ActiveGraceMs;
 
         foreach (var stale in _latest.Keys.Where(id => !remoteIds.Contains(id)).ToArray())
         {
             var local = _latest[stale];
             if (TransferStates.IsActive(local.State))
             {
-                continue;
+                // 正在传的条目先留着（服务端快照可能落后一拍）。但豁免**必须有期限**：
+                // 记录被删掉、两端都删过 → 服务端把行回收了，它的本地状态却还停在
+                // transferring，永远不会被移除——任务栏角标就一直亮着，界面上也留着幽灵行
+                // （真机：任务全没了，角标还在）。传输中的条目每传一块都会更新时间，
+                // 超过半分钟没动静，就当它已经被删掉。
+                if (local.UpdatedAtUnixMs > staleCutoff)
+                {
+                    continue;
+                }
             }
 
             if (local.UpdatedAtUnixMs < oldestRemote)
@@ -409,7 +434,7 @@ public sealed class TransfersViewModel : ViewModelBase
             _samples.Remove(stale);
         }
 
-        foreach (var dto in tasks)
+        foreach (var dto in visible)
         {
             if (!_latest.TryGetValue(dto.TaskId, out var existing)
                 || dto.UpdatedAtUnixMs >= existing.UpdatedAtUnixMs)

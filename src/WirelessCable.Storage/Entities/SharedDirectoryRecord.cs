@@ -160,6 +160,18 @@ public sealed class FileOperationJobRecord
     /// </summary>
     public string? ResultPayload { get; init; }
 
+    /// <summary>
+    /// 本批共多少个文件（整文件夹拉取时由电脑下发）。
+    /// 逐条作业本身不知道总数，手机端靠它显示整批进度；null = 未知。
+    /// </summary>
+    public int? BatchTotal { get; init; }
+
+    /// <summary>本批对应的文件夹名（手机端收成一行时显示）。</summary>
+    public string? BatchName { get; init; }
+
+    /// <summary>本批所有文件的总字节数：进度条的分母（见 FileJobDto.BatchTotalBytes）。</summary>
+    public long? BatchTotalBytes { get; init; }
+
     public required DateTimeOffset CreatedAtUtc { get; init; }
 
     public required DateTimeOffset UpdatedAtUtc { get; init; }

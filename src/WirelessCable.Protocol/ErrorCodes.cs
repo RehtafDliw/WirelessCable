@@ -87,6 +87,24 @@ public static class ErrorCodes
     /// <summary>当前任务状态不接受该操作（已终态、字节未收齐、源文件变化）。</summary>
     public const string TransferStateInvalid = "transfer_state_invalid";
 
+    /// <summary>
+    /// 任务被暂停，数据面（拉块/推块/确认完成）暂时不能继续。
+    ///
+    /// 单独给一个码，客户端才能区分"暂停"和"真的出错"：
+    /// 以前统一是 transfer_state_invalid，手机端会把文件删掉并标失败
+    /// （暂停一下，已经传完的文件反而没了）。
+    /// </summary>
+    public const string TransferPaused = "transfer_paused";
+
+    /// <summary>
+    /// 任务已被另一端取消（对端删记录时会先暂停、再取消）。
+    ///
+    /// 和 <see cref="TransferStateInvalid"/> 分开的原因：对面删了这条正在传的任务之后，
+    /// 本端点「继续」只能得到一个"没效果的成功提示"，用户完全不知道发生了什么。
+    /// 有这个码，两端都能提示"传输已被接收方取消，是否删除记录"。
+    /// </summary>
+    public const string TransferCancelled = "transfer_cancelled";
+
     /// <summary>分块序号与期望不一致。</summary>
     public const string ChunkOffsetMismatch = "chunk_offset_mismatch";
 

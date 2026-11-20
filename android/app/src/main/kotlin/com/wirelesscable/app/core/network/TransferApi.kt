@@ -1,6 +1,9 @@
 package com.wirelesscable.app.core.network
 
 import com.wirelesscable.app.core.protocol.ApiResult
+import com.wirelesscable.app.core.protocol.FileJobControlRequest
+import com.wirelesscable.app.core.protocol.FileJobControlResult
+import com.wirelesscable.app.core.protocol.FileProtocol
 import com.wirelesscable.app.core.protocol.ChunkAck
 import com.wirelesscable.app.core.protocol.TransferBatchActionRequest
 import com.wirelesscable.app.core.protocol.TransferBatchActionResult
@@ -176,13 +179,33 @@ class TransferApi private constructor(
      * 整文件夹的 200 个任务挂在同一行，逐个发请求光往返就要十几秒，
      * 中途断网还会只做一半；服务端一次处理完整批。
      */
+    /**
+     * 整批暂停/恢复作业队列。
+     *
+     * 整文件夹传输时文件是逐个下发、逐个执行的；只暂停已建出来的传输任务，
+     * 队列里剩下的会被继续取走，用户看到的就是"按了暂停还在传"。
+     */
+    suspend fun controlJobs(
+        token: String,
+        destinationPath: String?,
+        action: String,
+    ): ApiOutcome<FileJobControlResult> = withContext(Dispatchers.IO) {
+        val body = WcJson.instance
+            .encodeToString(FileJobControlRequest(destinationPath, action))
+            .toRequestBody(JSON_MEDIA)
+        executeJson<FileJobControlResult>(
+            buildRequest(FileProtocol.DEVICE_JOBS_CONTROL_PATH, token).post(body).build(),
+        )
+    }
+
     suspend fun batchAction(
         token: String,
         taskIds: List<String>,
         action: String,
+        deleteFiles: Boolean = false,
     ): ApiOutcome<TransferBatchActionResult> = withContext(Dispatchers.IO) {
         val body = WcJson.instance
-            .encodeToString(TransferBatchActionRequest(taskIds, action))
+            .encodeToString(TransferBatchActionRequest(taskIds, action, deleteFiles))
             .toRequestBody(JSON_MEDIA)
         executeJson(buildRequest(TransferPaths.BATCH, token).post(body).build())
     }

@@ -42,6 +42,15 @@ object SessionSyncEngine {
         val connected: Boolean = false,
         /** 被电脑主动断开（服务端回 423）。界面据此给「立即重连」。 */
         val paused: Boolean = false,
+        /**
+         * 当前会话对应的电脑 id。
+         *
+         * 界面判断"这台设备是不是正连着"必须用它，不能再用配对页那套
+         * `PairingViewModel.sessionState`——会话是由本引擎驱动的，配对页的状态只在
+         * 配对流程里更新。两者不同步时的表现就是：心跳一直 200，首页却写着"断开"，
+         * 用户以为断了去点重连，把好好的会话打断（换网络后必现）。
+         */
+        val deviceId: String? = null,
         /** 面向用户的失败原因（连不上、授权失效等）。 */
         val lastError: String? = null,
         /** 最近一次执行作业的时间（Unix 毫秒），0 表示还没执行过。 */
@@ -105,6 +114,19 @@ object SessionSyncEngine {
     /** 上次尝试拉起接收协程的时间：长轮询空转时 200 ms 一轮，不必每轮都建协程。 */
     private var lastReceiveSpawnAtMs = 0L
 
+    /**
+     * 索引上报也跑在独立协程里。
+     *
+     * 整机根的上限是 2 万条，BFS 的每一步都是一次 SAF 调用；一次全量扫描实测要十几分钟。
+     * 这条扫完之前，`runJobs` 一次都轮不到 —— 心跳还在发、界面还在刷，
+     * 但 `fs/device/jobs` 请求彻底消失，电脑发什么作业手机都不理，
+     * 看起来像"断连"，实际是作业轮询被索引饿死了（2026-11-20 真机定位）。
+     */
+    private var indexJob: Job? = null
+
+    /** 连接失败后用来重新发现电脑（mDNS）；[initialize] 时创建。 */
+    private var refresher: EndpointRefresher? = null
+
     private var app: WirelessCableApp? = null
     private var grants: RootGrantManager? = null
 
@@ -141,6 +163,32 @@ object SessionSyncEngine {
 
     fun initialize(application: WirelessCableApp) {
         app = application
+        refresher = EndpointRefresher(application.discovery, application.repository)
+    }
+
+    /**
+     * 连不上时重新找这台电脑（mDNS）。
+     *
+     * 为什么放在"第一次心跳失败"而不是更早：正常心跳 10 秒一次，
+     * 第一次失败到第二次失败之间有 10 秒窗口，够扫一次（4 秒），
+     * 且 `failedBeats >= 2` 就会关闸门，晚了就没机会了。
+     */
+    private suspend fun tryRefreshEndpoint() {
+        val refresher = refresher ?: return
+        val session = app?.repository?.loadSession() ?: return
+
+        when (val result = refresher.refresh(session)) {
+            is RefreshResult.Adopted ->
+                // 新地址已写回会话；ensureSession 的 key 含 host，下一轮会自动重建客户端
+                _state.update { it.copy(lastError = "已重新找到电脑（${result.host}），正在连接…") }
+
+            RefreshResult.FingerprintMismatch ->
+                _state.update { it.copy(lastError = "这台电脑的证书变了，请重新配对") }
+
+            RefreshResult.Unchanged,
+            RefreshResult.NotFound,
+            -> Unit
+        }
     }
 
     /**
@@ -256,6 +304,8 @@ object SessionSyncEngine {
         job = null
         receiveJob?.cancel()
         receiveJob = null
+        indexJob?.cancel()
+        indexJob = null
         _state.update { it.copy(running = false, connected = false, paused = false) }
         Log.i(TAG, "会话同步已彻底停止（退出应用）")
     }
@@ -267,6 +317,9 @@ object SessionSyncEngine {
 
         job?.cancel()
         job = null
+        // 索引扫描是在读用户存储，会话断开了就没有理由继续读
+        indexJob?.cancel()
+        indexJob = null
         // 正在收的那个文件让它写完再走：半路取消会在传输记录里留下一条"已取消"，
         // 文件也已经下载了大半——用户只是关了后台连接，不该丢这个文件。
         // 没有在收的话，循环已停，也不会再发起新的。
@@ -310,8 +363,20 @@ object SessionSyncEngine {
                 if (publishRequested || now - lastIndexAt >= INDEX_INTERVAL_MS) {
                     publishRequested = false
                     lastIndexAt = now
-                    if (current.service.publishIndexes(current.token, current.deviceId) == null) {
-                        _state.update { it.copy(lastIndexAtMs = System.currentTimeMillis()) }
+                    // 不 await：整机根扫描是分钟级的，串在这里会把作业轮询彻底饿死。
+                    // 上一轮还没扫完就不重复起（否则会堆一串并发扫描，更慢）。
+                    if (indexJob?.isActive != true) {
+                        val snapshot = current
+                        indexJob = scope.launch {
+                            try {
+                                snapshot.service.publishIndexes(snapshot.token, snapshot.deviceId)
+                                _state.update { it.copy(lastIndexAtMs = System.currentTimeMillis()) }
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (error: Throwable) {
+                                Log.w(TAG, "索引上报失败（不影响心跳与作业）", error)
+                            }
+                        }
                     }
                 }
 
@@ -320,12 +385,27 @@ object SessionSyncEngine {
                 val jobElapsed = System.currentTimeMillis() - jobStartedAt
                 if (summary.executed > 0) {
                     _state.update { it.copy(lastJobAtMs = System.currentTimeMillis()) }
+                }
 
-                    // 作业改过目录就立刻重报一次索引，并绕过整机根 5 分钟的重扫节流。
-                    // 不补这一次，电脑端会出现"操作成功但列表没变"（0.6.4 真机踩过）。
+                // 只有**改动过目录**的作业才立刻重报索引，并绕过整机根的重扫节流。
+                // 不补这一次，电脑端会出现"操作成功但列表没变"（0.6.4 真机踩过）；
+                // 但传输类作业（download / upload / list）不改目录，重报纯属浪费——
+                // 整机根 3700 条，每 8 个文件传一次，传输过程中批与批之间就会卡一两秒。
+                if (summary.mutated) {
                     lastIndexAt = System.currentTimeMillis()
-                    if (current.service.publishIndexes(current.token, current.deviceId, force = true) == null) {
-                        _state.update { it.copy(lastIndexAtMs = lastIndexAt) }
+                    // 同样不 await：改完目录要立刻重报，但扫描本身仍然是分钟级的
+                    if (indexJob?.isActive != true) {
+                        val snapshot = current
+                        indexJob = scope.launch {
+                            try {
+                                snapshot.service.publishIndexes(snapshot.token, snapshot.deviceId, force = true)
+                                _state.update { it.copy(lastIndexAtMs = System.currentTimeMillis()) }
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (error: Throwable) {
+                                Log.w(TAG, "索引重报失败（不影响心跳与作业）", error)
+                            }
+                        }
                     }
                 }
 
@@ -406,6 +486,15 @@ object SessionSyncEngine {
                 }
 
                 failedBeats++
+
+                // 第一次失败先重新找一下这台电脑：电脑换 Wi-Fi / 路由器重启后 IP 会变，
+                // 手机存的是死地址，不重新发现就只能等用户去重新扫码。
+                // 只在这里做一次——真找不到（关机 / 不在同一网络）就往下走原有逻辑，
+                // 不能让每一轮心跳都白扫 4 秒。
+                if (failedBeats == 1) {
+                    tryRefreshEndpoint()
+                }
+
                 if (failedBeats >= 2) {
                     // 自动重连只给一次机会：第二次失败就停下，等用户点
                     manualRetryRequired = true
@@ -446,6 +535,12 @@ object SessionSyncEngine {
         }
 
         sessionError = null
+
+        // 让界面知道"当前这台设备就是正在跑会话的那台"。
+        // 首页原来用配对页的状态判断，换网络后会出现"心跳正常但显示断开"。
+        if (_state.value.deviceId != session.deviceId) {
+            _state.update { it.copy(deviceId = session.deviceId) }
+        }
 
         val key = "${session.host}:${session.port}|${session.fingerprint}|$token"
 

@@ -165,7 +165,7 @@ object InboxReceiver {
 
                 val watcher = watchProgress(engine, item.taskId)
                 val result = try {
-                    engine.saveDownload(item, Uri.fromFile(target))
+                    engine.saveDownload(item, Uri.fromFile(target), allowResume = false)
                 } finally {
                     watcher.cancel()
                 }

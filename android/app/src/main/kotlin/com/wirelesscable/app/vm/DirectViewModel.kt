@@ -495,7 +495,7 @@ class DirectViewModel(application: Application) : AndroidViewModel(application) 
              *
              * 但**探活不能只看 TCP 通不通**：K105 那类坏 AP 上 SYN/ACK、TLS、
              * `status()` 全都正常，一开始传数据就掉到 1 KB/s。1.5.62 就是被这一点
-             * 骗过去了（现场日志：`快路径：172.18.15.58 可达，跳过热点`，
+             * 骗过去了（现场日志：`快路径：192.0.2.58 可达，跳过热点`，
              * 紧接着 `链路测速 16384B / 8034ms = 1 KB/s`）。
              * 所以这里改成真读几万字节，读不满就不算可用（1.5.63）。
              */

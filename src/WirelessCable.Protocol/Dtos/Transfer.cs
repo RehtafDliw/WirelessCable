@@ -129,6 +129,17 @@ public sealed class TransferStartRequestDto
     /// 服务端会校验该设备在此目录上的 Upload 权限，无权限直接拒绝。
     /// </summary>
     public string? DirectoryId { get; set; }
+
+    /// <summary>
+    /// 整批传输的批次名（缺省为单个文件）。
+    ///
+    /// 上传方向（手机 → 电脑）的一批文件可能**各自在不同的目录**下
+    /// （手机里选了整个 Music，里面是很多子目录）。
+    /// 服务端要靠它把"取消一批"补全到同批的每一个任务：
+    /// 按目录补全只对"同一目录"有效，跨目录就漏（真机：漏掉的那条
+    /// 还是 transferring，电脑端「传输中」角标一直亮着）。
+    /// </summary>
+    public string? BatchName { get; set; }
 }
 
 /// <summary>任务快照。列表、状态查询、创建响应共用。</summary>
@@ -207,6 +218,13 @@ public sealed class TransferBatchActionRequestDto
 
     /// <summary>`pause` / `resume` / `cancel` / `restart`，大小写不敏感。</summary>
     public string Action { get; set; } = string.Empty;
+
+    /// <summary>
+    /// `cancel` 时：连已经收到的文件一起删掉（用户勾了"同时删除文件"）。
+    ///
+    /// 不勾只清记录与半成品，文件留着。
+    /// </summary>
+    public bool DeleteFiles { get; set; }
 }
 
 /// <summary>
@@ -246,6 +264,14 @@ public sealed class TransferDeleteRecordsResultDto
     public int Deleted { get; set; }
 
     public int FilesDeleted { get; set; }
+
+    /// <summary>
+    /// 其中有多少条是"还在传、删除时顺手取消掉"的。
+    ///
+    /// 删除不再拒绝在跑的任务（拒绝之后用户还得先点取消，等于让他做两遍），
+    /// 引擎会先暂停、再取消、清掉半成品，然后照常删记录。
+    /// </summary>
+    public int Cancelled { get; set; }
 
     /// <summary>被拒绝的条目，形如「文件名：原因」。</summary>
     public List<string> Rejected { get; set; } = [];

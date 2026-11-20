@@ -61,6 +61,18 @@ object TransferErrorCodes {
     const val INVALID_FILE_NAME = "invalid_file_name"
     const val TRANSFER_NOT_FOUND = "transfer_not_found"
     const val TRANSFER_STATE_INVALID = "transfer_state_invalid"
+
+    /** 任务被暂停：数据面暂时不能继续，但**不是错误**（别删文件、别标失败）。 */
+    const val TRANSFER_PAUSED = "transfer_paused"
+
+    /**
+     * 任务已被另一端取消（对面删记录会先暂停再取消）。
+     *
+     * 和 TRANSFER_STATE_INVALID 分开：本端点「继续」时，这个码要提示
+     * "传输已被接收方取消，是否删除记录"，而不是含糊的"任务已结束"。
+     */
+    const val TRANSFER_CANCELLED = "transfer_cancelled"
+
     const val CHUNK_OFFSET_MISMATCH = "chunk_offset_mismatch"
     const val CHUNK_CHECKSUM_MISMATCH = "chunk_checksum_mismatch"
     const val CHUNK_IN_FLIGHT = "chunk_in_flight"
@@ -99,6 +111,8 @@ object TransferPaths {
 data class TransferBatchActionRequest(
     val taskIds: List<String>,
     val action: String,
+    /** `cancel` 时：连已经收到的文件一起删掉（用户勾了"同时删除文件"）。 */
+    val deleteFiles: Boolean = false,
 )
 
 @Serializable
@@ -123,6 +137,15 @@ data class TransferStartRequest(
      * 服务端会校验该设备在此目录上的 Upload 权限，无权限直接拒绝。
      */
     val directoryId: String? = null,
+    /**
+     * 整批传输的批次名（缺省为单个文件）。
+     *
+     * 上传方向（手机 → 电脑）的一批文件可能各自在不同的目录下，
+     * 服务端要靠它把"取消一批"补全到同批的每一个任务 ——
+     * 按目录补全只对同一目录有效，跨目录就会漏（漏掉的那条还在传，
+     * 电脑端「传输中」角标一直亮着）。
+     */
+    val batchName: String? = null,
 )
 
 @Serializable

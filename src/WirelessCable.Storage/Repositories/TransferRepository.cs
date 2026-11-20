@@ -180,12 +180,19 @@ public sealed class TransferRepository
         await using (var taskCommand = connection.CreateCommand())
         {
             taskCommand.Transaction = transaction;
+            // 进度照常记，但 **不允许把 paused 覆盖回 transferring**。
+            //
+            // 竞态：用户按下暂停的那一刻，可能正好有一块在写。写完后这行 SQL 会把
+            // paused 改成 transferring，于是下一块的暂停检查（WriteChunkAsync 里
+            // `session.State == paused`）就放行了 —— 真机现象是"点了暂停，80 MB 的文件
+            // 还是从头传到尾"（实测 16 → 48 → 75 → completed，只用了 3 秒）。
+            // 用 CASE 保住 paused：块可以落地，但状态不再回滚，下一块必然被拒。
             taskCommand.CommandText =
                 """
                 UPDATE TransferTasks
                 SET transferred_bytes = $transferred,
                     completed_chunks = completed_chunks + 1,
-                    status = $status,
+                    status = CASE WHEN status = 'paused' THEN status ELSE $status END,
                     updated_at_utc = $updated
                 WHERE task_id = $task;
                 """;
@@ -364,6 +371,220 @@ public sealed class TransferRepository
     }
 
     /// <summary>
+    /// 回收"取消很久了"的记录：行与分块一起删。
+    ///
+    /// 取消是双向的，两端都不再显示它，留着只是占地方（真机：341 条），
+    /// 还会把列表接口的名额占满——手机端按 limit 拉列表就拉不到该清理的那几条。
+    /// </summary>
+    public async Task<int> PurgeCancelledAsync(
+        DateTimeOffset cutoff,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = _factory.Open();
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            DELETE FROM TransferChunks
+            WHERE task_id IN (
+                SELECT task_id FROM TransferTasks
+                WHERE status = 'cancelled' AND updated_at_utc < $cutoff
+            );
+            DELETE FROM TransferTasks
+            WHERE status = 'cancelled' AND updated_at_utc < $cutoff;
+            """;
+        command.Parameters.AddWithValue("$cutoff", cutoff.ToString("O"));
+
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// 按**批次名**列出该设备这一批的全部任务 id。
+    ///
+    /// 「取消一批」要靠它补全：上传方向（手机 → 电脑）的一批文件可能
+    /// **各自在不同的目录**下（手机里选了整个 Music，里面是很多子目录），
+    /// 按目录补全只对"同一目录"有效，跨目录就漏——漏掉的那条还是 transferring，
+    /// 电脑端「传输中」角标就一直亮着（真机）。
+    /// </summary>
+    public async Task<IReadOnlyList<string>> ListTaskIdsByBatchNameAsync(
+        string deviceId,
+        string batchName,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(deviceId) || string.IsNullOrWhiteSpace(batchName))
+        {
+            return Array.Empty<string>();
+        }
+
+        await using var connection = _factory.Open();
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT task_id FROM TransferTasks
+            WHERE device_id = $device AND batch_name = $batch;
+            """;
+        command.Parameters.AddWithValue("$device", deviceId);
+        command.Parameters.AddWithValue("$batch", batchName);
+
+        var result = new List<string>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            result.Add(reader.GetString(0));
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// 列出某设备落在某个目录下的**全部**任务（含已隐藏的）。
+    ///
+    /// 取消"一批"时要靠它补全：用户选中的 taskId 未必覆盖整批
+    /// （有的还没建出任务、有的已经不在本机的列表里），
+    /// 漏掉的那几条会继续显示在「已完成」里、文件也还在（真机）。
+    /// </summary>
+    public async Task<IReadOnlyList<string>> ListTaskIdsByDirectoryAsync(
+        string deviceId,
+        string directory,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(deviceId) || string.IsNullOrWhiteSpace(directory))
+        {
+            return Array.Empty<string>();
+        }
+
+        await using var connection = _factory.Open();
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT task_id FROM TransferTasks
+            WHERE device_id = $device
+              AND (relative_path = $dir OR relative_path LIKE $dir || '/%')
+            """;
+        command.Parameters.AddWithValue("$device", deviceId);
+        command.Parameters.AddWithValue("$dir", directory);
+
+        var result = new List<string>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            result.Add(reader.GetString(0));
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// 手机端删除记录：把这一批对本设备隐藏（不动桌面端，也不看桌面端删没删）。
+    ///
+    /// 两端共用一张表，删记录不能直接删行——否则一端清理历史会把另一端的也抹掉
+    /// （用户报的"手机上删了记录，电脑的记录一起没了，文件其实还在"）。
+    /// 语义是**各删各的**：这里只写手机自己的标记。
+    /// </summary>
+    public async Task<int> HideForDeviceAsync(
+        IReadOnlyList<string> taskIds,
+        string deviceId,
+        DateTimeOffset updatedAtUtc,
+        CancellationToken cancellationToken = default)
+    {
+        if (taskIds.Count == 0 || string.IsNullOrWhiteSpace(deviceId))
+        {
+            return 0;
+        }
+
+        await using var connection = _factory.Open();
+        var hidden = 0;
+
+        foreach (var taskId in taskIds)
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                UPDATE TransferTasks
+                SET hidden_for_device = $device, updated_at_utc = $updated
+                WHERE task_id = $id;
+                """;
+            command.Parameters.AddWithValue("$device", deviceId);
+            command.Parameters.AddWithValue("$updated", updatedAtUtc.ToString("O"));
+            command.Parameters.AddWithValue("$id", taskId);
+
+            hidden += await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        return hidden;
+    }
+
+    /// <summary>
+    /// 桌面端删除记录：只对桌面隐藏。手机端照旧看得见，反之亦然。
+    /// </summary>
+    public async Task<int> HideForDesktopAsync(
+        IReadOnlyList<string> taskIds,
+        DateTimeOffset updatedAtUtc,
+        CancellationToken cancellationToken = default)
+    {
+        if (taskIds.Count == 0)
+        {
+            return 0;
+        }
+
+        await using var connection = _factory.Open();
+        var hidden = 0;
+
+        foreach (var taskId in taskIds)
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                UPDATE TransferTasks
+                SET desktop_hidden = 1, updated_at_utc = $updated
+                WHERE task_id = $id;
+                """;
+            command.Parameters.AddWithValue("$updated", updatedAtUtc.ToString("O"));
+            command.Parameters.AddWithValue("$id", taskId);
+
+            hidden += await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        return hidden;
+    }
+
+    /// <summary>
+    /// 清理"两端都已经删过"的记录（行 + 分块）。
+    ///
+    /// 这只是垃圾回收，不参与任何一端的删除判定：删除对用户是即时生效的，
+    /// 行还在不在库里的区别只是占不占磁盘。任何一端都看不到它时才清。
+    /// 返回删掉的行数。
+    /// </summary>
+    public async Task<int> PurgeHiddenAsync(CancellationToken cancellationToken = default)
+    {
+        await using var connection = _factory.Open();
+        await using var transaction = connection.BeginTransaction();
+
+        await using (var chunks = connection.CreateCommand())
+        {
+            chunks.Transaction = transaction;
+            chunks.CommandText =
+                """
+                DELETE FROM TransferChunks WHERE task_id IN (
+                    SELECT task_id FROM TransferTasks
+                    WHERE desktop_hidden = 1 AND hidden_for_device IS NOT NULL);
+                """;
+            await chunks.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        int purged;
+        await using (var tasks = connection.CreateCommand())
+        {
+            tasks.Transaction = transaction;
+            tasks.CommandText =
+                "DELETE FROM TransferTasks WHERE desktop_hidden = 1 AND hidden_for_device IS NOT NULL;";
+            purged = await tasks.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return purged;
+    }
+
+    /// <summary>
     /// 清掉所属设备已经不存在的传输记录（任务行 + 分块行），返回删掉的任务数。
     ///
     /// 老版本删设备时不删记录，留下的行会让传输中心一直显示陌生设备 ID 的任务，
@@ -444,6 +665,50 @@ public sealed class TransferRepository
         command.Parameters.AddWithValue("$id", taskId);
 
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// 只刷新活跃任务的 updated_at，**不改状态**。
+    ///
+    /// 数据面（拉块）不能写状态：一次拉块请求在"状态检查通过"之后才执行到这里，
+    /// 这期间用户点了暂停，无条件写 transferring 就把 paused 覆盖掉了。
+    /// 真机现象：电脑点暂停 → 任务短暂 paused → 手机又传完整文件 → 变 completed，
+    /// 桌面端几秒后跳进「已完成」，手机上还显示在传。
+    /// </summary>
+    /// <summary>
+    /// 刷新活跃任务的时间戳，并把 waiting/preparing 推进到 transferring。
+    ///
+    /// 返回**更新后的状态**；返回 null 表示这一行已经不在活跃态（期间被暂停/取消/收尾）。
+    /// 调用方要用它来广播进度：不能想当然地广播 transferring，否则一条在途的拉块请求
+    /// 会把刚点完暂停的界面顶回"传输中"（真机：底部提示已暂停、行内仍写传输中）。
+    /// </summary>
+    public async Task<string?> TouchActiveAsync(
+        string taskId,
+        DateTimeOffset updatedAtUtc,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = _factory.Open();
+        await using var command = connection.CreateCommand();
+
+        // 只刷时间戳、**不动已暂停/已结束的状态**（2.10.18：拉块会把 paused 覆盖回 transferring）。
+        // 但 waiting/preparing 要往前推成 transferring——否则两件事会坏：
+        //   1. 超时判定（ListStaleStartedAsync 只扫 transferring）永远不命中，
+        //      断网的任务要一直等到 TaskIdleTimeout 才被处理（真机就是"任务卡着不动"）；
+        //   2. 界面上传了几百兆还显示"等待中"。
+        command.CommandText =
+            """
+            UPDATE TransferTasks
+            SET updated_at_utc = $updated,
+                status = CASE WHEN status IN ('waiting', 'preparing') THEN 'transferring' ELSE status END
+            WHERE task_id = $id
+              AND status IN ('waiting', 'preparing', 'transferring', 'verifying')
+            RETURNING status;
+            """;
+        command.Parameters.AddWithValue("$updated", updatedAtUtc.ToString("O"));
+        command.Parameters.AddWithValue("$id", taskId);
+
+        var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        return value as string;
     }
 
     /// <summary>
@@ -540,6 +805,7 @@ public sealed class TransferRepository
             """
             SELECT * FROM TransferTasks
             WHERE device_id = $device
+              AND (hidden_for_device IS NULL OR hidden_for_device <> $device)
             ORDER BY
                 CASE WHEN status IN ('completed', 'failed', 'cancelled') THEN 1 ELSE 0 END,
                 updated_at_utc DESC
@@ -571,6 +837,7 @@ public sealed class TransferRepository
         command.CommandText =
             """
             SELECT * FROM TransferTasks
+            WHERE desktop_hidden = 0
             ORDER BY
                 CASE WHEN status IN ('completed', 'failed', 'cancelled') THEN 1 ELSE 0 END,
                 updated_at_utc DESC
@@ -711,6 +978,8 @@ public sealed class TransferRepository
             CompletedAtUtc = ParseNullableTime(reader, "completed_at_utc"),
             BatchId = GetNullableString(reader, "batch_id"),
             BatchName = GetNullableString(reader, "batch_name"),
+            HiddenForDevice = GetNullableString(reader, "hidden_for_device"),
+            DesktopHidden = reader.GetInt32(reader.GetOrdinal("desktop_hidden")),
         };
     }
 

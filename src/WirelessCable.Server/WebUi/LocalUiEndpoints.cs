@@ -6,6 +6,7 @@ using WirelessCable.Core.Domain;
 using WirelessCable.Protocol;
 using WirelessCable.Protocol.Dtos;
 using WirelessCable.Protocol.Json;
+using WirelessCable.Server.Diagnostics;
 using WirelessCable.Server.Files;
 using WirelessCable.Server.Pairing;
 using WirelessCable.Server.Runtime;
@@ -69,9 +70,70 @@ public static class LocalUiEndpoints
                 protocolVersion = snapshot.ProtocolVersion,
                 databaseReady = snapshot.DatabaseReady,
                 lastError = snapshot.LastError,
+                // mDNS 是"手机换网络后自动找回电脑"的前提：它没在跑，重连发现就是空转。
+                // 之前这个状态只在服务对象内部，界面上完全看不到。
+                mdnsRunning = context.RequestServices.GetRequiredService<WirelessCableServer>().MdnsRunning,
+                mdnsError = context.RequestServices.GetRequiredService<WirelessCableServer>().MdnsError,
                 // 手机传过来的文件落到这里；界面上的"打开接收目录"用的是同一个值
                 receivedDirectory = transfers.SharedDirectory,
             });
+        });
+
+        // ---------------- 诊断 ----------------
+        //
+        // snapshot 是给回归脚本（scripts/smoke-test.py）和诊断包共用的只读快照：
+        // 它只读库、不写任何东西，所以可以随时拉。
+        // 手机版安装包：手机浏览器访问这台电脑就能下载安装，
+        // 不用把 APK 传来传去（本机界面里有个「下载手机版」链接指向它）。
+        // 挂在根路径而不是 /app/api：那个组要本机令牌，手机浏览器拿不到。
+        // APK 本身不含凭据，局域网内可下载是可接受的。
+        app.MapGet("/download/android", (HttpContext context) =>
+        {
+            var runtime = context.RequestServices.GetRequiredService<ServerRuntime>();
+            var version = runtime.Snapshot().AppVersion;
+            var baseDir = AppContext.BaseDirectory;
+
+            var candidates = new[]
+            {
+                Path.Combine(baseDir, "WirelessCable.apk"),
+                Path.Combine(baseDir, "..", "dist", $"WirelessCable-{version}.apk"),
+            };
+
+            foreach (var path in candidates)
+            {
+                var full = Path.GetFullPath(path);
+                if (File.Exists(full))
+                {
+                    return Results.File(
+                        full,
+                        "application/vnd.android.package-archive",
+                        "WirelessCable.apk");
+                }
+            }
+
+            return Results.NotFound(new { code = "apk_not_found", message = "本机没有找到手机版安装包。" });
+        });
+
+        api.MapGet("/diagnostics/snapshot", async (HttpContext context) =>
+        {
+            var diagnostics = context.RequestServices.GetRequiredService<DiagnosticsService>();
+            var snapshot = await diagnostics.SnapshotAsync(context.RequestAborted).ConfigureAwait(false);
+            return Results.Json(snapshot);
+        });
+
+        // 诊断包：浏览器下载一个 zip。
+        // includeNames 默认 false —— 默认脱敏，用户要排查落点再显式打开。
+        api.MapGet("/diagnostics/bundle", async (HttpContext context, bool? includeNames) =>
+        {
+            var diagnostics = context.RequestServices.GetRequiredService<DiagnosticsService>();
+            var bytes = await diagnostics
+                .BuildBundleAsync(includeNames == true, context.RequestAborted)
+                .ConfigureAwait(false);
+
+            return Results.File(
+                bytes,
+                "application/zip",
+                $"wirelesscable-diag-{DateTime.Now:yyyyMMdd-HHmmss}.zip");
         });
 
         // ---------------- 设备 ----------------
@@ -198,7 +260,11 @@ public static class LocalUiEndpoints
 
         // ---------------- 配对申请 ----------------
         // 电脑亮码：手机扫这张图就能配对（新版界面首页的「配对码」）。
-        // 每次调用都重新生成一次性随机数；热点只是兜底，开不出来照样出码。
+        // 每次调用都重新生成一次性随机数。
+        //
+        // 热点是**可选项**：请求里 hotspot=true 才开。以前无条件开，结果是
+        // 电脑靠 Wi-Fi 上网、网卡又不支持 STA+AP 并发时，一开热点电脑自己就断网了。
+        // 手机和电脑在同一 Wi-Fi 时根本不需要热点，所以默认不开。
         api.MapPost("/pairing/qr", async (HttpContext context) =>
         {
             var server = context.RequestServices.GetRequiredService<WirelessCableServer>();
@@ -209,11 +275,23 @@ public static class LocalUiEndpoints
                 return Results.Json(new { ok = false, message = "服务未就绪" });
             }
 
+            var request = await ReadOptionalBodyAsync<LocalPairingQrRequest>(context).ConfigureAwait(false);
+            var wanted = request?.Hotspot ?? hotspotBridge.ReadPreference?.Invoke() ?? false;
+
+            // 用户这次的选择记下来，下次出码沿用。只在请求里**显式**给了值时才写，
+            // 免得"没传参数"把上次的选择冲成默认值。
+            if (request?.Hotspot is { } explicitChoice)
+            {
+                hotspotBridge.WritePreference?.Invoke(explicitChoice);
+            }
+
             QrHotspotDto? hotspot = null;
             string? hotspotText = null;
             string? hotspotError = null;
+            // 这次真的把热点关了？是的话二维码要剔掉残留的热点网段地址
+            var justStoppedHotspot = false;
 
-            if (hotspotBridge.EnsureAsync is not null)
+            if (wanted && hotspotBridge.EnsureAsync is not null)
             {
                 try
                 {
@@ -237,6 +315,13 @@ public static class LocalUiEndpoints
                                 Address = offer.Address!,
                             };
                         }
+                        else
+                        {
+                            // 热点开着但网卡还在等 ICS 配地址（或系统没配成功）：
+                            // 这张码里没有 hotspot 字段，手机不会去连热点。
+                            // 必须明说，否则用户以为勾了就有兜底。
+                            hotspotError = "热点地址还没就绪，请点「重新生成」";
+                        }
                     }
                 }
                 catch (Exception ex)
@@ -246,8 +331,24 @@ public static class LocalUiEndpoints
                     hotspotError = "电脑热点开启失败，手机可连同一 Wi-Fi";
                 }
             }
+            else if (!wanted)
+            {
+                // 取消勾选就把我们开的热点关掉，否则它会一直广播到退出应用。
+                // 只关"应用开的"：用户在系统设置里自己开的不动。
+                try
+                {
+                    if (hotspotBridge.StopAsync is not null)
+                    {
+                        justStoppedHotspot = await hotspotBridge.StopAsync().ConfigureAwait(false);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Serilog.Log.Warning(ex, "关闭热点失败（不影响出码）");
+                }
+            }
 
-            var qr = server.CreatePairingQr(hotspot);
+            var qr = server.CreatePairingQr(hotspot, justStoppedHotspot);
             if (qr is null)
             {
                 return Results.Json(new { ok = false, message = "服务未就绪" });
@@ -260,8 +361,12 @@ public static class LocalUiEndpoints
                 text = qr.Text,
                 expiresAtUnixMs = qr.ExpiresAtUnixMs,
                 hotspot = hotspotText,
+                // 拆开给：界面要按语言拼文案，整句只适合直接打印
+                hotspotSsid = hotspot?.Ssid,
+                hotspotPassphrase = hotspot?.Passphrase,
                 hotspotAddress = hotspot?.Address,
                 hotspotError,
+                hotspotPreferred = wanted,
             });
         });
 
@@ -284,10 +389,16 @@ public static class LocalUiEndpoints
         {
             var transfers = context.RequestServices.GetRequiredService<TransferEngine>();
             var devices = context.RequestServices.GetRequiredService<DeviceRepository>();
+            var fileJobs = context.RequestServices.GetRequiredService<DeviceFileRepository>();
             var cancellationToken = context.RequestAborted;
 
             var names = (await devices.ListAsync(cancellationToken).ConfigureAwait(false))
                 .ToDictionary(d => d.DeviceId, d => d.DisplayName, StringComparer.Ordinal);
+
+            // 队列里还没执行的作业（整文件夹是逐个作业下发的，暂停时这些文件还没有传输任务）。
+            // 界面靠它判断"这一批到底结束没有"：只看任务列表的话，暂停后几秒就被判成已完成。
+            var openJobs = await fileJobs.CountOpenJobsByDirectoryAsync(cancellationToken)
+                .ConfigureAwait(false);
 
             // 上限必须与手机端 /transfers 一致（1000），否则前端按目录分组的批次会被拦腰截断：
             // 一次 330 个文件的整夹下载，200 条只能看到前 200 个，行上显示的"已完成 N/M"就永远对不上。
@@ -295,27 +406,34 @@ public static class LocalUiEndpoints
                 .ListRecentAsync(Math.Clamp(limit ?? 100, 1, 1000), names, cancellationToken)
                 .ConfigureAwait(false);
 
-            return Results.Json(items.Select(dto => new
+            return Results.Json(items.Select(dto =>
             {
-                taskId = dto.TaskId,
-                fileName = dto.FileName,
-                direction = dto.Direction,
-                purpose = dto.Purpose,
-                deviceName = dto.DeviceName,
-                totalBytes = dto.TotalBytes,
-                transferredBytes = dto.TransferredBytes,
-                state = dto.State,
-                errorMessage = dto.ErrorMessage,
-                localPath = dto.LocalPath,
-                // 落点相对路径：整文件夹下载时它是判断"这些任务属于哪个目录"的唯一依据
-                // （服务端不给 batchId，前端只能按路径第一段兜底分组）。
-                // 少了它，194 个文件就会在列表里铺 194 行。
-                relativePath = dto.RelativePath,
-                // 整文件夹传输的批次：界面据此把 N 个任务收成一行
-                batchId = dto.BatchId,
-                batchName = dto.BatchName,
-                createdAtUnixMs = dto.CreatedAtUnixMs,
-                updatedAtUnixMs = dto.UpdatedAtUnixMs,
+                // 这个落点目录下还有多少作业没跑完（pending/paused/running），其中多少是暂停的
+                var queue = QueueFor(dto.RelativePath, openJobs);
+                return new
+                {
+                    taskId = dto.TaskId,
+                    fileName = dto.FileName,
+                    direction = dto.Direction,
+                    purpose = dto.Purpose,
+                    deviceName = dto.DeviceName,
+                    totalBytes = dto.TotalBytes,
+                    transferredBytes = dto.TransferredBytes,
+                    state = dto.State,
+                    errorMessage = dto.ErrorMessage,
+                    localPath = dto.LocalPath,
+                    // 落点相对路径：整文件夹下载时它是判断"这些任务属于哪个目录"的唯一依据
+                    // （服务端不给 batchId，前端只能按路径第一段兜底分组）。
+                    // 少了它，194 个文件就会在列表里铺 194 行。
+                    relativePath = dto.RelativePath,
+                    // 整文件夹传输的批次：界面据此把 N 个任务收成一行
+                    batchId = dto.BatchId,
+                    batchName = dto.BatchName,
+                    queuedJobs = queue.Open,
+                    pausedJobs = queue.Paused,
+                    createdAtUnixMs = dto.CreatedAtUnixMs,
+                    updatedAtUnixMs = dto.UpdatedAtUnixMs,
+                };
             }));
         });
 
@@ -369,6 +487,7 @@ public static class LocalUiEndpoints
         {
             var transfers = context.RequestServices.GetRequiredService<TransferEngine>();
             var devices = context.RequestServices.GetRequiredService<DeviceRepository>();
+            var files = context.RequestServices.GetRequiredService<FileService>();
             var cancellationToken = context.RequestAborted;
 
             var action = (request.Action ?? string.Empty).Trim().ToLowerInvariant();
@@ -378,14 +497,25 @@ public static class LocalUiEndpoints
             }
 
             var ids = (request.TaskIds ?? []).Distinct(StringComparer.Ordinal).ToList();
-            if (ids.Count == 0)
+            // 只清队列时没有 taskId（整批任务都被删了就取不到 id），
+            // 有落点目录就够定位要作废的作业
+            if (ids.Count == 0 && string.IsNullOrWhiteSpace(request.DestinationPath))
             {
                 return Results.BadRequest(new { code = "invalid_request", message = "没有指定任务。" });
             }
 
             var ok = 0;
             var failed = 0;
+            // 整批里绝大多数文件早就传完了，暂停/恢复对它们本来就没意义。
+            // 把它们算成失败，用户会看到一堆"只有进行中的任务可以暂停"。
+            var skipped = 0;
             string? firstError = null;
+            string? firstErrorCode = null;
+            // 恢复时发现任务已被另一端取消（对面删记录会先暂停再取消）。
+            // 端点把它带回界面：那里要弹"传输已被接收方取消，是否删除记录"。
+            var cancelledTasks = new List<string>();
+            // 整批的动作要能延伸到这个目录还没执行的作业上，设备从任务记录里取一次
+            string? batchDeviceId = null;
 
             foreach (var taskId in ids)
             {
@@ -399,6 +529,7 @@ public static class LocalUiEndpoints
                 }
 
                 var (device, direction) = record.Value;
+                batchDeviceId ??= device.DeviceId;
                 TransferResult<TransferTaskDto>? maybe = action switch
                 {
                     "pause" => await transfers.PauseAsync(device, taskId, cancellationToken).ConfigureAwait(false),
@@ -414,6 +545,7 @@ public static class LocalUiEndpoints
                 {
                     failed++;
                     firstError ??= "上传任务不能重新开始";
+                    firstErrorCode ??= ErrorCodes.TransferStateInvalid;
                     continue;
                 }
 
@@ -423,17 +555,137 @@ public static class LocalUiEndpoints
                 }
                 else
                 {
+                    var code = result.Error?.Code;
+
+                    // 对面删了这条正在传的任务：恢复只能失败，但这不是"出错了"，
+                    // 而是"这条已经不存在了"。单独带回去让界面问要不要删记录。
+                    if (action == "resume" &&
+                        string.Equals(code, ErrorCodes.TransferCancelled, StringComparison.Ordinal))
+                    {
+                        cancelledTasks.Add(taskId);
+                        continue;
+                    }
+
+                    // 已完成/已取消/已删除的任务被一起选中时，跳过就好，别报错。
+                    // cancel 也要算跳过：取消整批时，已经传完的那几条本来就该被一起清掉，
+                    // 它们返回"任务已结束"不是错误（真正清理由后面的 CancelBatchAsync 做）。
+                    if (action is "pause" or "resume" or "cancel" &&
+                        code is ErrorCodes.TransferStateInvalid or ErrorCodes.TransferNotFound)
+                    {
+                        skipped++;
+                        continue;
+                    }
+
                     failed++;
-                    firstError ??= result.Error?.Message ?? result.Error?.Code;
+                    firstError ??= result.Error?.Message ?? code;
+                    firstErrorCode ??= code;
                 }
             }
 
-            // 一条都没成功才算整体失败：批里本来就有已完成的任务时，
-            // 暂停它们会失败，但用户要的是"剩下的都停下"，不该整单报错。
-            return ok > 0
-                ? Results.Json(new { ok, failed, firstError })
-                : Results.BadRequest(new { code = "batch_failed", message = firstError ?? "这一批任务都处理不了。" });
+            // 暂停/恢复还要**停住作业队列**：其余文件还没执行，也就还没有传输任务，
+            // 只暂停已建出来的任务等于什么都没停。作业改成 paused 后手机不会再取走，
+            // 恢复时改回 pending 自动续上。
+            var jobsChanged = 0;
+            if (action is "pause" or "resume" or "cancel")
+            {
+                if (action == "cancel")
+                {
+                    // 取消这批：pending / paused / running 一起作废。
+                    // running 是手机已经领走、正在执行的那几个——不一起停，
+                    // "取消"之后手机上还会把剩下的传完。
+                    jobsChanged = await files
+                        .SetDeviceJobsStatusManyAsync(
+                            batchDeviceId, request.DestinationPath,
+                            [FileJobStatuses.Pending, FileJobStatuses.Paused, FileJobStatuses.Running],
+                            FileJobStatuses.Cancelled, cancellationToken)
+                        .ConfigureAwait(false);
+
+                    // **按 taskId 精确作废关联的作业**，并把这些任务一并取消。
+                    // 上面的按目录作废覆盖的是"还没建出传输任务"的那些；
+                    // 已经建出来的（手机正在传的那几个）必须靠这一步终结，
+                    // 否则手机端列表里还挂着一条"已取消"、也还在传（真机）。
+                    // batchDeviceId 可能为空（取消一个不存在的对象、只有落点目录时）：
+                    // 传空进去查设备会抛异常，这里直接跳过。
+                    if (!string.IsNullOrWhiteSpace(batchDeviceId))
+                    {
+                        var jobDevice = await devices
+                            .GetAsync(batchDeviceId, cancellationToken)
+                            .ConfigureAwait(false);
+                        if (jobDevice is not null)
+                        {
+                            // **双向终止**：任务终结、**两端都删记录**、勾了就连文件一起删。
+                            // 只作废作业不够——另一端还把已传完的那些归在「已完成」里
+                            // （真机：双端拉文件夹，任一端取消，另一端照样显示已完成）。
+                            var cancelled = await transfers
+                                .CancelBatchAsync(jobDevice, ids, request.DeleteFiles, cancellationToken)
+                                .ConfigureAwait(false);
+                            if (cancelled.Success && cancelled.Value is not null)
+                            {
+                                ok += cancelled.Value.Cancelled + cancelled.Value.Deleted;
+                            }
+                        }
+                    }
+                }
+                else if (action == "pause")
+                {
+                    jobsChanged = await files
+                        .SetDeviceJobsStatusManyAsync(
+                            batchDeviceId, request.DestinationPath,
+                            [FileJobStatuses.Pending, FileJobStatuses.Running],
+                            FileJobStatuses.Paused, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                else
+                {
+                    jobsChanged = await files
+                        .SetDeviceJobsStatusManyAsync(
+                            batchDeviceId, request.DestinationPath,
+                            [FileJobStatuses.Paused],
+                            FileJobStatuses.Pending, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+            }
+
+            // 一条都没成功也不算请求失败：批里本来就有已完成的任务时，暂停它们会失败，
+            // 但用户要的是"剩下的都停下"，不该整单报错。
+            // 队列里有作业被停住时同样算成功——那正是用户在停的东西。
+            //
+            // 全都动不了（记录已删、任务已完成）时也返回 200：界面那边"取消"是两步
+            // （先作废队列、再删记录），这一步报 400 会让第二步根本执行不了，
+            // 用户看到的就是"不能再次取消"（真机上就卡在这儿）。
+            return Results.Json(new
+            {
+                ok,
+                failed,
+                skipped,
+                firstError,
+                firstErrorCode,
+                cancelledTasks,
+                jobsChanged,
+                // "什么都没发生"和"做成了"在旧返回里分不出来，界面只能一律提示成功。
+                // 现在至少带上 ok/skipped，前端可以据实说话。
+                noop = ok == 0 && jobsChanged == 0,
+            });
         });
+
+        // 局部函数：把"任务落点相对路径"对齐到作业的 destination_path
+        static (int Open, int Paused) QueueFor(
+            string? relativePath,
+            IReadOnlyDictionary<string, (int Open, int Paused)> openJobs)
+        {
+            if (string.IsNullOrWhiteSpace(relativePath))
+            {
+                return (0, 0);
+            }
+
+            var slash = relativePath.LastIndexOf('/');
+            if (slash <= 0)
+            {
+                return (0, 0);
+            }
+
+            return openJobs.TryGetValue(relativePath[..slash], out var found) ? found : (0, 0);
+        }
 
         // 电脑 → 手机：界面选了文件之后落任务（手机来拉）。
         api.MapPost("/transfers/send", async (HttpContext context, LocalSendRequest request) =>
@@ -481,6 +733,9 @@ public static class LocalUiEndpoints
                 {
                     ok = true,
                     deleted = result.Value?.Deleted ?? 0,
+                    filesDeleted = result.Value?.FilesDeleted ?? 0,
+                    // 其中有多少条是"还在传、删除时顺手取消掉"的
+                    cancelled = result.Value?.Cancelled ?? 0,
                     rejected = result.Value?.Rejected ?? [],
                 })
                 : Results.BadRequest(new { code = result.Error?.Code, message = result.Error?.Message });
@@ -834,7 +1089,10 @@ public static class LocalUiEndpoints
                         request.SourcePath,
                         request.DestinationPath,
                         request.DisplayName,
-                        cancellationToken: cancellationToken)
+                        cancellationToken: cancellationToken,
+                        batchTotal: request.BatchTotal,
+                        batchName: request.BatchName,
+                        batchTotalBytes: request.BatchTotalBytes)
                     .ConfigureAwait(false);
 
                 return Results.Json(new { jobId = job.JobId, status = job.Status });
@@ -886,12 +1144,46 @@ public static class LocalUiEndpoints
                 receivedDirectory = transfers.SharedDirectory,
                 maxActiveTransfers = ProtocolConstants.MaxActiveTransfersPerDevice,
                 chunkSize = ProtocolConstants.ChunkSizeBytes,
+
+                // 出码时是否同时开热点：对话框里那个勾选框的初值（也是上次的选择）
+                hotspotOnPairing = context.RequestServices
+                    .GetRequiredService<LocalHotspotBridge>().ReadPreference?.Invoke() ?? false,
             });
         });
     }
 
     private static bool IsOnline(DateTimeOffset? lastSeenUtc, DateTimeOffset now) =>
         lastSeenUtc is not null && now - lastSeenUtc.Value <= OnlineWindow;
+
+    /// <summary>
+    /// 读可选的 JSON 请求体。没有 body、body 是空、或格式不对都返回 null，
+    /// 由调用方按"没传参"处理——出码这类端点不该因为客户端没带 body 就 400。
+    /// </summary>
+    private static async Task<T?> ReadOptionalBodyAsync<T>(HttpContext context)
+        where T : class
+    {
+        // 只挡"明确是 0"的：chunked 传输时 ContentLength 是 null 但 body 有内容，
+        // 按 null 判断会把参数当没传。空 body 由下面的 JsonException 兜住。
+        if (context.Request.ContentLength is 0)
+        {
+            return null;
+        }
+
+        try
+        {
+            return await context.Request
+                .ReadFromJsonAsync<T>(WcJson.Options, context.RequestAborted)
+                .ConfigureAwait(false);
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
+        }
+        catch (BadHttpRequestException)
+        {
+            return null;
+        }
+    }
 
     private static IReadOnlyList<string> DescribePermissions(SharedDirectoryPermissions permissions)
     {
@@ -907,23 +1199,28 @@ public static class LocalUiEndpoints
     }
 
     /// <summary>任务属于哪台设备、什么方向 —— 暂停/取消都要把设备带上。</summary>
+    /// <summary>
+    /// 把 taskId 还原成"哪台设备 + 什么方向"。
+    ///
+    /// 必须**按 taskId 直查**，不能拿设备列表接口去反扫：
+    /// ① 列表会过滤"手机删过的"行（删除各删各的），手机清理过历史后，
+    ///    桌面点继续只会得到"任务不存在"——其实行还在，只是对它不可见；
+    /// ② 列表有 200 条上限，几百个文件的整批里排在后面的任务永远查不到。
+    /// </summary>
     private static async Task<(StoredDevice Device, string Direction)?> FindTaskDeviceAsync(
         TransferEngine transfers,
         DeviceRepository devices,
         string taskId,
         CancellationToken cancellationToken)
     {
-        foreach (var device in await devices.ListAsync(cancellationToken).ConfigureAwait(false))
+        var record = await transfers.FindRecordAsync(taskId, cancellationToken).ConfigureAwait(false);
+        if (record is null)
         {
-            var items = await transfers.ListAsync(device, 200, cancellationToken).ConfigureAwait(false);
-            var hit = items.FirstOrDefault(i => string.Equals(i.TaskId, taskId, StringComparison.Ordinal));
-            if (hit is not null)
-            {
-                return (device, hit.Direction);
-            }
+            return null;
         }
 
-        return null;
+        var device = await devices.GetAsync(record.DeviceId, cancellationToken).ConfigureAwait(false);
+        return device is null ? null : (device, record.Direction);
     }
 
     public sealed class LocalSessionRequest
@@ -971,6 +1268,29 @@ public static class LocalUiEndpoints
 
         /// <summary>pause / resume / cancel / restart。</summary>
         public string? Action { get; set; }
+
+        /// <summary>`cancel` 时：连已经收到的文件一起删掉（用户勾了"同时删除文件"）。</summary>
+        public bool DeleteFiles { get; set; }
+
+        /// <summary>
+        /// 这批的落点相对目录（整文件夹下载时的分组键）。
+        ///
+        /// 暂停/恢复要连**还没下发给手机**的作业一起停：传输任务是手机执行一个作业才建一条，
+        /// 队列里剩下的几十上百个文件根本没对应任务可暂停。没有这个字段，
+        /// 用户点了暂停只会收到"只有进行中的任务可以暂停"。
+        /// </summary>
+        public string? DestinationPath { get; set; }
+    }
+
+    /// <summary>出配对码的请求。</summary>
+    public sealed class LocalPairingQrRequest
+    {
+        /// <summary>
+        /// 是否同时开启电脑热点。null 表示"没传"，沿用上次的选择。
+        ///
+        /// 可空是有意的：老前端/脚本不带这个字段时，不能把它当成 false 去关热点。
+        /// </summary>
+        public bool? Hotspot { get; set; }
     }
 
     public sealed class LocalSendRequest
@@ -1000,5 +1320,17 @@ public static class LocalUiEndpoints
 
         /// <summary>重命名的新名字（或保存到电脑时的文件名）。</summary>
         public string? DisplayName { get; set; }
+
+        /// <summary>
+        /// 本批共多少个文件（整文件夹保存到电脑时由界面填）。
+        /// 手机端逐条执行作业、不知道总数，靠它显示 17/330 而不是 17/17。
+        /// </summary>
+        public int? BatchTotal { get; set; }
+
+        /// <summary>本批对应的文件夹名（手机端收成一行时显示）。</summary>
+        public string? BatchName { get; set; }
+
+        /// <summary>本批所有文件的总字节数：手机端进度条的分母。</summary>
+        public long? BatchTotalBytes { get; set; }
     }
 }

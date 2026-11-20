@@ -611,7 +611,10 @@ public sealed class FileService
         string? sourcePath,
         string? destinationPath,
         string? displayName,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        int? batchTotal = null,
+        string? batchName = null,
+        long? batchTotalBytes = null)
     {
         var root = await ResolveRootAsync(device, rootId, cancellationToken).ConfigureAwait(false);
         if (!root.Success)
@@ -655,6 +658,9 @@ public sealed class FileService
             SourcePath = sourcePath,
             DestinationPath = destinationPath,
             DisplayName = displayName,
+            BatchTotal = batchTotal,
+            BatchName = batchName,
+            BatchTotalBytes = batchTotalBytes,
             Status = FileJobStatuses.Pending,
             CreatedAtUtc = now,
             UpdatedAtUtc = now,
@@ -716,19 +722,40 @@ public sealed class FileService
         }
 
         var results = new List<FileJobDto>();
-        // 只取一小批：一次把几百个下载作业全标成 running，排在后面的会在手机开始执行前
-        // 就耗掉 300 秒的上报窗口（实测 330 张图有 136 个 job_timeout）。
-        // 手机执行完立刻再来取，空转代价只有一次长轮询。
+        // 一次领几个：现在是 3。租约 + 心跳保证"领走也不会失控"——
+        // 手机每 8 秒续约，暂停/取消会立刻让它停手（以前只能靠"一次只领 1 个"）。
+        var leaseUntil = DateTimeOffset.UtcNow.AddSeconds(ProtocolConstants.JobLeaseSeconds);
         foreach (var job in pending.Take(ProtocolConstants.MaxJobsPerPoll))
         {
             await _deviceFiles
-                .UpdateJobStatusAsync(job.JobId, FileJobStatuses.Running, null, null, cancellationToken)
+                .UpdateJobStatusAsync(
+                    job.JobId, FileJobStatuses.Running, null, null, cancellationToken,
+                    leaseUntilUtc: leaseUntil)
                 .ConfigureAwait(false);
             results.Add(ToDto(job, FileJobStatuses.Running));
         }
 
         return results;
     }
+
+    /// <summary>续租：返回作业当前状态（running 表示继续，其余让手机停手）。</summary>
+    public Task<string?> RenewJobLeaseAsync(
+        StoredDevice device,
+        string jobId,
+        CancellationToken cancellationToken = default)
+        => _deviceFiles.RenewJobLeaseAsync(
+            jobId,
+            device.DeviceId,
+            DateTimeOffset.UtcNow.AddSeconds(ProtocolConstants.JobLeaseSeconds),
+            cancellationToken);
+
+    /// <summary>手机把建出来的传输任务挂到作业上（暂停后继续要靠它认出上次那个任务）。</summary>
+    public Task AttachJobTransferTaskAsync(
+        StoredDevice device,
+        string jobId,
+        string transferTaskId,
+        CancellationToken cancellationToken = default)
+        => _deviceFiles.AttachJobTransferTaskAsync(jobId, device.DeviceId, transferTaskId, cancellationToken);
 
     /// <summary>
     /// 回收超时未回报的作业。
@@ -881,7 +908,10 @@ public sealed class FileService
         string? destinationPath,
         string? displayName,
         string? transferTaskId = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        int? batchTotal = null,
+        string? batchName = null,
+        long? batchTotalBytes = null)
     {
         var root = await _deviceFiles.GetRootAsync(deviceId, rootId, cancellationToken).ConfigureAwait(false);
         if (root is null)
@@ -919,6 +949,9 @@ public sealed class FileService
             DestinationPath = destinationPath,
             DisplayName = displayName,
             TransferTaskId = transferTaskId,
+            BatchTotal = batchTotal,
+            BatchName = batchName,
+            BatchTotalBytes = batchTotalBytes,
             Status = FileJobStatuses.Pending,
             CreatedAtUtc = now,
             UpdatedAtUtc = now,
@@ -929,6 +962,56 @@ public sealed class FileService
         return ToDto(record);
     }
 
+
+    /// <summary>整批暂停/恢复时改作业队列的状态（见 DeviceFileRepository.SetJobsStatusAsync）。</summary>
+    public Task<int> SetDeviceJobsStatusAsync(
+        string? deviceId,
+        string? destinationPath,
+        string fromStatus,
+        string toStatus,
+        CancellationToken cancellationToken = default)
+        => _deviceFiles.SetJobsStatusAsync(deviceId, destinationPath, fromStatus, toStatus, cancellationToken);
+
+    /// <summary>
+    /// 按多个原状态批量改作业。
+    ///
+    /// 暂停/取消必须覆盖 **running**：手机把作业领走后就在本地执行，
+    /// 只改 pending 等于没停（"暂停刹不住车"的根）。租约让这个改动真正生效——
+    /// 手机下一次续约就会看到 paused/cancelled 并停手。
+    /// </summary>
+    public Task<int> SetDeviceJobsStatusManyAsync(
+        string? deviceId,
+        string? destinationPath,
+        IReadOnlyList<string> fromStatuses,
+        string toStatus,
+        CancellationToken cancellationToken = default)
+        => _deviceFiles.SetJobsStatusManyAsync(
+            deviceId, destinationPath, fromStatuses, toStatus, cancellationToken);
+
+    /// <summary>
+    /// 按传输任务改它关联的作业状态（见 DeviceFileRepository.SetJobsStatusForTransferTaskAsync）。
+    ///
+    /// 传输任务与作业必须同步：暂停/取消要作用在**两层**上，否则
+    /// "电脑按了暂停、手机还在传"这种各说各话就会回来。
+    /// </summary>
+    public Task<int> SetDeviceJobsStatusForTransferTaskAsync(
+        IReadOnlyList<string> transferTaskIds,
+        IReadOnlyList<string> fromStatuses,
+        string toStatus,
+        CancellationToken cancellationToken = default)
+        => _deviceFiles.SetJobsStatusForTransferTaskAsync(
+            transferTaskIds, fromStatuses, toStatus, cancellationToken);
+
+    /// <summary>
+    /// 列出某设备"还没结束的作业"所关联的传输任务（停作业时要一并停掉它们）。
+    /// </summary>
+    public Task<IReadOnlyList<string>> ListActiveJobTransferTaskIdsAsync(
+        string deviceId,
+        string? destinationPath,
+        IReadOnlyList<string> fromStatuses,
+        CancellationToken cancellationToken = default)
+        => _deviceFiles.ListActiveJobTransferTaskIdsAsync(
+            deviceId, destinationPath, fromStatuses, cancellationToken);
 
     /// <summary>
     /// 某台手机还没取走的作业。本机界面用它把"已经排队的保存请求"标出来：
@@ -1570,6 +1653,9 @@ public sealed class FileService
         DestinationPath = job.DestinationPath,
         DisplayName = job.DisplayName,
         TransferTaskId = job.TransferTaskId,
+        BatchTotal = job.BatchTotal,
+        BatchName = job.BatchName,
+        BatchTotalBytes = job.BatchTotalBytes,
         Status = statusOverride ?? job.Status,
         ErrorCode = job.ErrorCode,
         ErrorMessage = job.ErrorMessage,

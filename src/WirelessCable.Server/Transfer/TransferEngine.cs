@@ -35,6 +35,8 @@ public sealed class TransferEngine : IDisposable
     private readonly TransferRepository _repository;
     private readonly TransferOptions _options;
     private readonly SharedDirectoryResolver? _directories;
+    /// <summary>删记录时要连带作废这批还没执行的作业（队列不清，删完还会重建任务）。</summary>
+    private readonly FileService? _files;
     private readonly ConcurrentDictionary<string, UploadSession> _uploads = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _downloadGates = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _hashGate;
@@ -54,11 +56,13 @@ public sealed class TransferEngine : IDisposable
     public TransferEngine(
         TransferRepository repository,
         TransferOptions options,
-        SharedDirectoryResolver? directories = null)
+        SharedDirectoryResolver? directories = null,
+        FileService? files = null)
     {
         _repository = repository;
         _options = options;
         _directories = directories;
+        _files = files;
         _sharedDirectory = options.SharedDirectory;
         _sharedRoots[options.SharedDirectory] = 0;
         _hashGate = new SemaphoreSlim(Math.Max(1, options.MaxConcurrentHashJobs));
@@ -202,6 +206,11 @@ public sealed class TransferEngine : IDisposable
             SourceDevice = device.DeviceId,
             TargetDevice = DesktopDevice,
             DirectoryId = directoryId,
+            // **批次名**：上传方向的一批文件可能各自在不同目录，
+            // 没有它就没法把"取消一批"补全到同批的每一个任务
+            // （按目录补全只对同一目录有效，跨目录就漏——真机：漏掉的那条
+            // 还是 transferring，电脑端「传输中」角标一直亮着）。
+            BatchName = NormalizeBatchName(request.BatchName),
             CreatedAtUtc = now,
             UpdatedAtUtc = now,
         };
@@ -286,7 +295,7 @@ public sealed class TransferEngine : IDisposable
         // 暂停期间拒收分块：属临时状态而非错误，标 retryable 让客户端稍后重试
         if (string.Equals(session.State, TransferStates.Paused, StringComparison.Ordinal))
         {
-            return Fail(ErrorCodes.TransferStateInvalid, "任务已暂停，请先继续。", 409, retryable: true);
+            return Fail(ErrorCodes.TransferPaused, "任务已暂停，请先继续。", 409, retryable: true);
         }
 
         var providedSha = NormalizeSha(chunkSha256);
@@ -367,7 +376,15 @@ public sealed class TransferEngine : IDisposable
             session.Completed[index] = true;
             session.Hashes[index] = providedSha;
             session.Written += expected;
-            session.State = TransferStates.Transferring;
+            // **不能无条件写 transferring**：这一块在暂停之前就已经在写了，
+            // 写完时若把内存里的 Paused 覆盖掉，下一块的状态检查就会放行，
+            // 于是一路传到尾（真机：80 MB 文件暂停后 16→48→75→completed）。
+            // 库那边同样有 CASE 保护，两处必须一起改，否则内存先破防。
+            if (!string.Equals(session.State, TransferStates.Paused, StringComparison.Ordinal))
+            {
+                session.State = TransferStates.Transferring;
+            }
+
             session.LastActivityUtc = now;
 
             await _repository
@@ -407,6 +424,14 @@ public sealed class TransferEngine : IDisposable
         if (TransferStates.IsTerminal(session.State))
         {
             return Fail(ErrorCodes.TransferStateInvalid, "任务已结束。", 409);
+        }
+
+        // 暂停期间不受理"完成"：最后一块可能正好在暂停前一瞬落地，
+        // 不拦的话会被标成 completed —— 用户看到的就是"点了暂停，它自己传完了"。
+        // 返回 retryable，用户点继续后客户端会再调一次。
+        if (string.Equals(session.State, TransferStates.Paused, StringComparison.Ordinal))
+        {
+            return Fail(ErrorCodes.TransferPaused, "任务已暂停，请先继续。", 409, retryable: true);
         }
 
         if (!await session.Gate.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false))
@@ -660,7 +685,7 @@ public sealed class TransferEngine : IDisposable
 
         if (string.Equals(record.Status, TransferStates.Paused, StringComparison.Ordinal))
         {
-            return Fail(ErrorCodes.TransferStateInvalid, "任务已暂停，请先继续。", 409, retryable: true);
+            return Fail(ErrorCodes.TransferPaused, "任务已暂停，请先继续。", 409, retryable: true);
         }
 
         if (index < 0 || index >= record.ChunkCount)
@@ -714,14 +739,27 @@ public sealed class TransferEngine : IDisposable
             return Fail(ErrorCodes.FileInaccessible, "打开源文件失败。", 403);
         }
 
-        // 拉块只证明对端还活着；进度（transferred_bytes）只由回执推进，杜绝"读了就算收到"
+        // 拉块只证明对端还活着；进度（transferred_bytes）只由回执推进，杜绝"读了就算收到"。
+        //
+        // 这里**只刷时间戳、不写状态**：请求在"不是 paused"检查之后才走到这里，
+        // 期间用户可能点了暂停，无条件写 transferring 会把 paused 覆盖掉
+        // （真机：暂停后文件又传完、几秒后跳进「已完成」）。
+        //
+        // 广播也一样：必须用**库里现在的状态**。曾经这里硬写 transferring，
+        // 于是暂停后一条在途的拉块请求就把界面顶回"传输中"——底部提示已暂停、
+        // 行内却写传输中。更新没命中活跃态（返回 null）时读一次最新记录。
         var now = DateTimeOffset.UtcNow;
-        await _repository.TouchAsync(taskId, TransferStates.Transferring, now, cancellationToken)
-            .ConfigureAwait(false);
+        var liveState = await _repository.TouchActiveAsync(taskId, now, cancellationToken).ConfigureAwait(false);
+
+        if (liveState is null)
+        {
+            var latest = await _repository.GetAsync(taskId, cancellationToken).ConfigureAwait(false);
+            liveState = latest?.Status ?? record.Status;
+        }
 
         RaiseProgress(ToDto(record, device.DisplayName) with
         {
-            State = TransferStates.Transferring,
+            State = liveState,
             UpdatedAtUnixMs = now.ToUnixTimeMilliseconds(),
         });
 
@@ -885,6 +923,14 @@ public sealed class TransferEngine : IDisposable
             return Fail(ErrorCodes.TransferStateInvalid, "任务已结束。", 409);
         }
 
+        // 暂停期间不许"确认完成"：手机可能刚拉完最后一块就被暂停，
+        // 这一步放过去的话任务直接变 completed —— 桌面端几秒后跳进「已完成」，
+        // 用户看到的就是"暂停了但它自己传完了"。
+        if (string.Equals(record.Status, TransferStates.Paused, StringComparison.Ordinal))
+        {
+            return Fail(ErrorCodes.TransferPaused, "任务已暂停，请先继续。", 409, retryable: true);
+        }
+
         if (record.CompletedChunks < record.ChunkCount)
         {
             return Fail(ErrorCodes.TransferStateInvalid, "还有分块未确认接收。", 409,
@@ -953,6 +999,166 @@ public sealed class TransferEngine : IDisposable
     /// </list>
     /// </summary>
     /// <summary>
+    /// 取消一批传输：**双向**终止 —— 作业作废、任务终结、**两端都删掉记录**。
+    ///
+    /// 与「删除记录」是两种语义，必须分开：
+    /// - 删除记录 = 清理历史，**各删各的**，不影响另一端；
+    /// - 取消传输 = 这条传输到此为止，**两端都不该再留着它**。
+    ///
+    /// 整文件夹里**已经传完**的那些也要一起清掉：用户点的是"取消这一批"，
+    /// 另一端却还把它们归在「已完成」里（真机：勾了"同时删除文件"也照旧留着）。
+    /// </summary>
+    public async Task<TransferResult<TransferDeleteRecordsResultDto>> CancelBatchAsync(
+        StoredDevice? device,
+        IReadOnlyList<string> taskIds,
+        bool deleteFiles,
+        CancellationToken cancellationToken = default)
+    {
+        var ids = taskIds
+            .Where(static id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.Ordinal)
+            .Take(ProtocolConstants.MaxDeleteTransferRecords)
+            .ToArray();
+
+        var result = new TransferDeleteRecordsResultDto();
+        if (ids.Length == 0)
+        {
+            return TransferResult<TransferDeleteRecordsResultDto>.Ok(result);
+        }
+
+        // **补全整批**：用户选中的 taskId 未必覆盖整批。
+        // 漏掉的那几条会继续显示在「已完成」里、已收到的文件也还在
+        // （真机：取消一批 6 条，漏了 1 条 → 电脑端还显示已完成、文件剩一个）。
+        // 取消"一批"的语义就是**这一批全清**。
+        //
+        // 补全有两条路，**都要走**：
+        // ① 按**批次名**：上传方向（手机 → 电脑）的一批文件可能各自在不同目录下
+        //    （手机里选了整个 Music，里面是很多子目录），按目录补全会漏。
+        // ② 按**落点目录**：老数据没有批次名，只能靠目录兜底。
+        var owner0 = await _repository.GetAsync(ids[0], cancellationToken).ConfigureAwait(false);
+        if (owner0 is not null)
+        {
+            var siblings = new List<string>();
+
+            if (!string.IsNullOrWhiteSpace(owner0.BatchName))
+            {
+                // **有批次名**：只按批次补全。批次名是这一批唯一的标识，
+                // 跨目录也能覆盖全；再按目录补会**误伤同目录的别的批**
+                // （用户取消 A 批，把 B 批也清了）。
+                siblings.AddRange(await _repository
+                    .ListTaskIdsByBatchNameAsync(owner0.DeviceId, owner0.BatchName, cancellationToken)
+                    .ConfigureAwait(false));
+            }
+            else
+            {
+                // **没有批次名**（老数据）：只能按落点目录兜底。
+                var directory = await ResolveBatchDirectoryAsync(ids, cancellationToken).ConfigureAwait(false);
+                if (directory is not null)
+                {
+                    siblings.AddRange(await _repository
+                        .ListTaskIdsByDirectoryAsync(owner0.DeviceId, directory, cancellationToken)
+                        .ConfigureAwait(false));
+                }
+            }
+
+            if (siblings.Count > 0)
+            {
+                ids = ids.Concat(siblings).Distinct(StringComparer.Ordinal).ToArray();
+            }
+        }
+
+        // 1) 还没结束的先终结（置 cancelled、清半成品）
+        string? ownerDeviceId = null;
+        foreach (var taskId in ids)
+        {
+            var record = await _repository.GetAsync(taskId, cancellationToken).ConfigureAwait(false);
+            if (record is null)
+            {
+                continue;
+            }
+
+            ownerDeviceId ??= record.DeviceId;
+
+            // **终态的也要置 cancelled**：只有 cancelled 才会被两端列表过滤掉。
+            // 已经传完的那些如果留着 completed，另一端照旧把它们显示在「已完成」里
+            // （真机：双端拉文件夹，取消后另一端还挂着已完成）。
+            await CancelForDeleteAsync(record, device?.DisplayName ?? record.DeviceId, cancellationToken)
+                .ConfigureAwait(false);
+            result.Cancelled++;
+        }
+
+        // 2) 删记录 + 删文件（勾了"同时删除"才删文件）
+        var deleted = await DeleteRecordsCoreAsync(device, ids, deleteFiles, cancellationToken, hideLocally: false)
+            .ConfigureAwait(false);
+        if (deleted.Success && deleted.Value is not null)
+        {
+            result.Deleted += deleted.Value.Deleted;
+            result.FilesDeleted += deleted.Value.FilesDeleted;
+            result.Rejected.AddRange(deleted.Value.Rejected);
+        }
+
+        // 3) **不隐藏那一行**。
+        //    "两端都不显示"靠的是**状态 cancelled + 两端列表都过滤 cancelled**，
+        //    不是靠隐藏。隐藏会让手机端再也拉不到这条 → 它没法清本地记录 →
+        //    本地状态卡在 transferring，永远挂在「传输中」（真机：电脑取消后手机还挂着）。
+        //    行由 30 分钟的定时回收清掉：那时两端都已经处理完了。
+        //    （"各删各的"仍然只属于"删除记录"那个动作——它走 hidden_for_device/desktop_hidden。）
+
+        // 4) 作业一起作废：手机端不会再把它们领走
+        if (device is not null && _files is not null)
+        {
+            await _files.SetDeviceJobsStatusForTransferTaskAsync(
+                ids,
+                [FileJobStatuses.Pending, FileJobStatuses.Paused, FileJobStatuses.Running],
+                FileJobStatuses.Cancelled,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        Log.Information(
+            "取消整批 device={DeviceId} records={Records} cancelled={Cancelled} deleted={Deleted} files={Files}",
+            device?.DeviceId ?? ownerDeviceId ?? "(宿主界面)", ids.Length, result.Cancelled, result.Deleted, result.FilesDeleted);
+
+        return TransferResult<TransferDeleteRecordsResultDto>.Ok(result);
+    }
+
+    /// <summary>
+    /// 批次名归一：空的一律当"没有批次"，太长的截断（库里是有限长度的列）。
+    /// </summary>
+    private static string? NormalizeBatchName(string? batchName)
+    {
+        if (string.IsNullOrWhiteSpace(batchName))
+        {
+            return null;
+        }
+
+        var trimmed = batchName.Trim();
+        return trimmed.Length <= 200 ? trimmed : trimmed[..200];
+    }
+
+    /// <summary>
+    /// 这批任务的落点目录（relative_path 的第一段），用来按目录补全整批。
+    /// </summary>
+    private async Task<string?> ResolveBatchDirectoryAsync(
+        IReadOnlyList<string> taskIds,
+        CancellationToken cancellationToken)
+    {
+        foreach (var taskId in taskIds)
+        {
+            var record = await _repository.GetAsync(taskId, cancellationToken).ConfigureAwait(false);
+            var relative = record?.RelativePath;
+            if (string.IsNullOrEmpty(relative))
+            {
+                continue;
+            }
+
+            var slash = relative.IndexOf('/');
+            return slash > 0 ? relative[..slash] : null;
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// 删除传输记录（**校验归属**）。HTTP 端点走这个：手机只能删自己的记录。
     /// </summary>
     public Task<TransferResult<TransferDeleteRecordsResultDto>> DeleteRecordsAsync(
@@ -978,11 +1184,20 @@ public sealed class TransferEngine : IDisposable
         CancellationToken cancellationToken = default)
         => DeleteRecordsCoreAsync(null, taskIds, deleteFiles, cancellationToken);
 
+    /// <param name="hideLocally">
+    /// 是否给本端打「已删」标记。
+    ///
+    /// **取消**传 false：取消要靠**状态 cancelled** 让两端都不显示，而不是靠隐藏。
+    /// 隐藏会让手机端再也拉不到这条 → 它没法清本地记录 → 本地状态卡在 transferring，
+    /// 永远挂在「传输中」（真机：电脑取消后手机还挂着）。
+    /// 行由定时回收清掉，那时两端都已经处理完了。
+    /// </param>
     private async Task<TransferResult<TransferDeleteRecordsResultDto>> DeleteRecordsCoreAsync(
         StoredDevice? device,
         IReadOnlyList<string> taskIds,
         bool deleteFiles,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool hideLocally = true)
     {
         if (taskIds is null || taskIds.Count == 0)
         {
@@ -996,7 +1211,10 @@ public sealed class TransferEngine : IDisposable
             .ToArray();
 
         var result = new TransferDeleteRecordsResultDto();
-        var removable = new List<string>(clean.Length);
+        var hidden = new List<string>(clean.Length);
+        // 这一批还没执行的作业也要作废：整文件夹下载是一文件一作业，删了记录但队列还在，
+        // 手机会继续一个个建出新任务，列表里又冒出来（"删不干净"）。
+        var queues = new HashSet<(string DeviceId, string Directory)>();
 
         foreach (var taskId in clean)
         {
@@ -1017,8 +1235,25 @@ public sealed class TransferEngine : IDisposable
 
             if (TransferStates.IsActive(record.Status))
             {
+                // **正在传输的不给删记录**（需求 4）：传输中的条目只有「取消传输」一个动作。
+                // 删记录是"清理历史"，不该顺手把正在传的这条也终止掉——
+                // 那是"取消"该干的事，两者的语义必须分开。
                 result.Rejected.Add($"{record.FileName}：还在传输，请先取消");
                 continue;
+            }
+            else if (record.Status is TransferStates.Paused or TransferStates.Interrupted)
+            {
+                // 暂停中/中断中的：**删除记录 = 这条传输到此为止**。
+                // 以前只终结"还在跑"的，暂停中的任务删完状态仍是 paused——
+                // 于是对方点「继续」会被真的恢复，而记录早已被删掉、文件没人收
+                // （真机：点继续照样提示"已继续传输"，实际任务已经没了）。
+                // 终结之后，对方点继续会拿到 transfer_cancelled，
+                // 两端都能问一句"已被接收方取消，要删记录吗"。
+                await CancelForDeleteAsync(record, device?.DisplayName ?? record.DeviceId, cancellationToken)
+                    .ConfigureAwait(false);
+
+                record = await _repository.GetAsync(taskId, cancellationToken).ConfigureAwait(false) ?? record;
+                result.Cancelled++;
             }
 
             // 半截临时文件跟着记录一起清，避免泄漏磁盘空间
@@ -1039,14 +1274,58 @@ public sealed class TransferEngine : IDisposable
                 }
             }
 
-            removable.Add(taskId);
+            // 记住这一批的落点目录：队列里还没执行的作业要一起作废
+            var dir = DirectoryKeyOf(record.RelativePath);
+            if (dir is not null)
+            {
+                queues.Add((record.DeviceId, dir));
+            }
+
+            hidden.Add(taskId);
         }
 
-        if (removable.Count > 0)
+        // 先作废队列，再删记录。反过来的话，两步之间手机还能领走作业、建出新任务。
+        if (_files is not null && queues.Count > 0)
         {
-            result.Deleted = await _repository
-                .DeleteTasksAsync(removable, cancellationToken)
-                .ConfigureAwait(false);
+            foreach (var (deviceId, dir) in queues)
+            {
+                try
+                {
+                    await _files.SetDeviceJobsStatusManyAsync(
+                        deviceId, dir,
+                        [FileJobStatuses.Pending, FileJobStatuses.Paused, FileJobStatuses.Running],
+                        FileJobStatuses.Cancelled,
+                        cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    // 队列作废失败不该挡住删记录：用户要的是"这条从列表里消失"
+                    Log.Warning(ex, "删除传输记录时作废队列失败 device={DeviceId} dir={Dir}", deviceId, dir);
+                }
+            }
+        }
+
+        if (hidden.Count > 0)
+        {
+            var now = DateTimeOffset.UtcNow;
+
+            if (hideLocally)
+            {
+                // 各删各的：只写本端的标记，完全不看另一端删过没有。
+                result.Deleted += device is null
+                    ? await _repository.HideForDesktopAsync(hidden, now, cancellationToken).ConfigureAwait(false)
+                    : await _repository.HideForDeviceAsync(hidden, device.DeviceId, now, cancellationToken)
+                        .ConfigureAwait(false);
+
+                // 两端都删过的行只是垃圾，顺手回收（不影响任何一端的可见性）
+                await _repository.PurgeHiddenAsync(cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                // 取消：**不打标记**。记录靠 cancelled 状态让两端都不显示，
+                // 而且手机端要能拉到它、据此清掉本地记录（隐藏了就拉不到了）。
+                result.Deleted += hidden.Count;
+            }
         }
 
         if (result.Deleted > 0 || result.Rejected.Count > 0)
@@ -1057,6 +1336,84 @@ public sealed class TransferEngine : IDisposable
         }
 
         return TransferResult<TransferDeleteRecordsResultDto>.Ok(result);
+    }
+
+    /// <summary>
+    /// 删除一个还在传的任务时先把它暂停：对端在下一块之前就会看到 paused 并停手。
+    /// 顺序是"暂停 → 取消 → 清半成品"，暂停这一步是为了让在途的那一块不再写下去。
+    /// </summary>
+    private async Task PauseForDeleteAsync(string taskId, CancellationToken cancellationToken)
+    {
+        var now = DateTimeOffset.UtcNow;
+        await _repository.TouchAsync(taskId, TransferStates.Paused, now, cancellationToken).ConfigureAwait(false);
+
+        // 内存里的上传会话也要翻状态，否则后续推块仍会被接受
+        if (_uploads.TryGetValue(taskId, out var session))
+        {
+            session.State = TransferStates.Paused;
+        }
+    }
+
+    /// <summary>
+    /// 取消一个任务（**不校验归属**，只给删除流程用）：置 cancelled、清分块位图与临时文件。
+    ///
+    /// 上传的半成品在这里删；下载的半成品在手机上，由手机同步到 cancelled 之后自己清。
+    /// </summary>
+    private async Task CancelForDeleteAsync(
+        TransferTaskRecord record,
+        string deviceName,
+        CancellationToken cancellationToken)
+    {
+        if (_uploads.TryGetValue(record.TaskId, out var session))
+        {
+            await FailSessionAsync(session, null, null, cancellationToken, TransferStates.Cancelled)
+                .ConfigureAwait(false);
+            Log.Information("删除记录前已取消上传任务 task={TaskId}", record.TaskId);
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        await _repository.UpdateResultAsync(
+            record.TaskId, TransferStates.Cancelled, record.Sha256,
+            null, null, null, now, null, cancellationToken).ConfigureAwait(false);
+        await _repository.DeleteChunksAsync(record.TaskId, cancellationToken).ConfigureAwait(false);
+        TryDeleteFile(record.TempPath);
+
+        // **联动作业**：取消传输任务，关联的作业也要作废，
+        // 否则手机端还会把它领走、重建一个新任务继续传（真机：电脑取消作业后手机还在传）。
+        if (_files is not null)
+        {
+            await _files.SetDeviceJobsStatusForTransferTaskAsync(
+                [record.TaskId],
+                [FileJobStatuses.Running, FileJobStatuses.Pending, FileJobStatuses.Paused],
+                FileJobStatuses.Cancelled,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+
+        RaiseProgress(ToDto(record, deviceName) with
+        {
+            State = TransferStates.Cancelled,
+            UpdatedAtUnixMs = now.ToUnixTimeMilliseconds(),
+        });
+    }
+
+    /// <summary>
+    /// 把"任务落点相对路径"折成作业的目录键（去掉最后一段文件名）。
+    ///
+    /// 与界面分组的规则一致：整文件夹是逐条作业下发的，作业的 `destination_path`
+    /// 就是这里的目录；单文件没有 `/`，返回 null——那种记录后面没有排队作业，
+    /// 也不该拿空目录去匹配（空值会让 SQL 退化成"这台设备的所有作业"）。
+    /// </summary>
+    private static string? DirectoryKeyOf(string? relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath))
+        {
+            return null;
+        }
+
+        var slash = relativePath.LastIndexOf('/');
+        return slash <= 0 ? null : relativePath[..slash];
     }
 
     /// <summary>
@@ -1177,6 +1534,14 @@ public sealed class TransferEngine : IDisposable
                 ToDto(record, device.DisplayName), cancellationToken).ConfigureAwait(false));
         }
 
+        if (string.Equals(record.Status, TransferStates.Cancelled, StringComparison.Ordinal))
+        {
+            // 另一半删掉了这条正在传的任务（删除会先暂停再取消），或者别处点了取消。
+            // 给一个专用错误码：两端据此提示"传输已被接收方取消，是否删除记录"，
+            // 而不是含糊的"任务已结束"，更不能假装恢复成功——那会让用户以为还在传。
+            return Fail(ErrorCodes.TransferCancelled, "传输已被接收方取消。", 409);
+        }
+
         if (TransferStates.IsTerminal(record.Status))
         {
             return Fail(ErrorCodes.TransferStateInvalid, "任务已结束，无法恢复。", 409);
@@ -1243,9 +1608,31 @@ public sealed class TransferEngine : IDisposable
         Log.Information("任务恢复 task={TaskId} state={State} completed={Completed}/{Total}",
             taskId, dto.State, dto.CompletedChunks.Length, dto.ChunkCount);
 
+        // **联动作业**：恢复传输任务后，作业要回到 pending —— 手机端只领 pending 的作业，
+        // 停在 paused/running 上手机就永远不会再动它（真机：恢复后手机没反应）。
+        if (_files is not null)
+        {
+            await _files.SetDeviceJobsStatusForTransferTaskAsync(
+                [taskId],
+                [FileJobStatuses.Paused],
+                FileJobStatuses.Pending,
+                cancellationToken).ConfigureAwait(false);
+        }
+
         RaiseProgress(dto);
         return TransferResult<TransferTaskDto>.Ok(dto);
     }
+
+    /// <summary>
+    /// 按 taskId 直查一条任务记录，**不受"按端隐藏"影响**。
+    ///
+    /// 本机界面要能操作"手机删过、桌面还留着"的行（删除是各删各的），
+    /// 用列表接口反查会把这些行过滤掉，界面只能得到"任务不存在"这种误导性结论。
+    /// </summary>
+    public Task<TransferTaskRecord?> FindRecordAsync(
+        string taskId,
+        CancellationToken cancellationToken = default)
+        => _repository.GetAsync(taskId, cancellationToken);
 
     /// <summary>任务的分块列表（续传时客户端据此补差集）。</summary>
     public async Task<TransferResult<IReadOnlyList<ChunkInfoDto>>> ListChunksAsync(
@@ -1334,8 +1721,126 @@ public sealed class TransferEngine : IDisposable
 
         Log.Information("任务已暂停 task={TaskId}", taskId);
 
+        // **联动作业**（暂停要作用在两层上）：
+        // 作业是"电脑下发给手机的待办"，传输任务是"正在传的数据"。
+        // 只停后者，作业还是 running —— 手机端续租照旧、照着推块，
+        // "电脑暂停了、手机还在传"就是这么来的（真机）。
+        if (_files is not null)
+        {
+            await _files.SetDeviceJobsStatusForTransferTaskAsync(
+                [taskId],
+                [FileJobStatuses.Running, FileJobStatuses.Pending],
+                FileJobStatuses.Paused,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+
         RaiseProgress(dto);
         return TransferResult<TransferTaskDto>.Ok(dto);
+    }
+
+    /// <summary>
+    /// 取消一批：作业与传输任务**一起**终结。
+    ///
+    /// 作业是"电脑下发给手机的待办"，传输任务是"正在传的数据"。只停一层，
+    /// 另一层会继续按老状态行动：
+    /// - 作废了作业但任务还在 → 手机端列表里挂着一条"已取消"，还在传；
+    /// - 取消了任务但作业还在 → 手机端把作业领走、重建一个新任务继续传。
+    /// 两端都取消才是用户要的（需求 2）。
+    /// </summary>
+    public async Task<int> CancelJobsAndTasksAsync(
+        StoredDevice device,
+        string? destinationPath,
+        IReadOnlyList<string>? taskIds = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (_files is null)
+        {
+            return 0;
+        }
+
+        var targets = (taskIds ?? Array.Empty<string>())
+            .Where(static id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        if (targets.Count == 0)
+        {
+            return 0;
+        }
+
+        // 作业作废：按 transfer_task_id **精确**反查，不按目录（否则会误伤同目录的别的批）
+        await _files.SetDeviceJobsStatusForTransferTaskAsync(
+            targets,
+            [FileJobStatuses.Pending, FileJobStatuses.Paused, FileJobStatuses.Running],
+            FileJobStatuses.Cancelled,
+            cancellationToken).ConfigureAwait(false);
+
+        // 传输任务一并取消（走完整的取消流程：清半成品、置 cancelled）
+        var cancelled = 0;
+        foreach (var taskId in targets)
+        {
+            var one = await CancelAsync(device, taskId, cancellationToken).ConfigureAwait(false);
+            if (one.Success)
+            {
+                cancelled++;
+            }
+        }
+
+        return cancelled;
+    }
+
+    /// <summary>
+    /// 停作业时，把这些作业关联的**传输任务**一起停（暂停或取消）。
+    ///
+    /// 作业是"电脑下发给手机的待办"，传输任务是"正在传的数据"。
+    /// 只停作业的话，手机端下一次租约发现才停手，而另一端的列表里
+    /// 那条任务还挂着、状态也没变（真机：手机端取消后，电脑端还显示一条"已取消"）。
+    /// </summary>
+    public async Task<int> StopJobsAndTasksAsync(
+        StoredDevice device,
+        string? destinationPath,
+        bool cancel,
+        CancellationToken cancellationToken = default)
+    {
+        if (_files is null)
+        {
+            return 0;
+        }
+
+        var active = cancel
+            ? new[] { FileJobStatuses.Pending, FileJobStatuses.Paused, FileJobStatuses.Running }
+            : new[] { FileJobStatuses.Pending, FileJobStatuses.Running };
+
+        // 先查：作业状态改掉之后就查不到了
+        var taskIds = await _files.ListActiveJobTransferTaskIdsAsync(
+            device.DeviceId, destinationPath, active, cancellationToken).ConfigureAwait(false);
+
+        var changed = await _files.SetDeviceJobsStatusManyAsync(
+            device.DeviceId, destinationPath, active,
+            cancel ? FileJobStatuses.Cancelled : FileJobStatuses.Paused,
+            cancellationToken).ConfigureAwait(false);
+
+        var stopped = 0;
+        foreach (var taskId in taskIds)
+        {
+            var one = cancel
+                ? await CancelAsync(device, taskId, cancellationToken).ConfigureAwait(false)
+                : await PauseAsync(device, taskId, cancellationToken).ConfigureAwait(false);
+            if (one.Success)
+            {
+                stopped++;
+            }
+        }
+
+        if (stopped > 0)
+        {
+            Log.Information(
+                "作业已停，关联传输任务同步 device={DeviceId} jobs={Jobs} tasks={Tasks} cancel={Cancel}",
+                device.DeviceId, changed, stopped, cancel);
+        }
+
+        return changed;
     }
 
     public async Task<TransferResult<TransferTaskDto>> CancelAsync(
@@ -1353,7 +1858,23 @@ public sealed class TransferEngine : IDisposable
             await FailSessionAsync(session, null, null, cancellationToken, TransferStates.Cancelled)
                 .ConfigureAwait(false);
 
+            // 取消是**双向**的（需求 2）：状态置成 cancelled 就是"双方都看到取消"。
+            // 不在这里打删除标记——两端列表都按"cancelled 不显示"过滤，
+            // 手机端再把本地记录清掉。提前隐藏反而会让手机无从得知（看不到那条被删了）。
+
             Log.Information("上传任务已取消 task={TaskId}", taskId);
+
+        // **联动作业**：取消传输任务，关联的作业也要作废，
+        // 否则手机端还会把它领走、重建一个新任务继续传（真机：电脑取消作业后手机还在传）。
+        if (_files is not null)
+        {
+            await _files.SetDeviceJobsStatusForTransferTaskAsync(
+                [taskId],
+                [FileJobStatuses.Running, FileJobStatuses.Pending, FileJobStatuses.Paused],
+                FileJobStatuses.Cancelled,
+                cancellationToken).ConfigureAwait(false);
+        }
+
 
             return TransferResult<TransferTaskDto>.Ok(ToDto(session) with
             {
@@ -1384,6 +1905,18 @@ public sealed class TransferEngine : IDisposable
             .ConfigureAwait(false);
         await _repository.DeleteChunksAsync(taskId, cancellationToken).ConfigureAwait(false);
         TryDeleteFile(record.TempPath);
+
+        // **联动作业**：取消传输任务，关联的作业也要作废，
+        // 否则手机端还会把它领走、重建一个新任务继续传（真机：电脑取消作业后手机还在传）。
+        if (_files is not null)
+        {
+            await _files.SetDeviceJobsStatusForTransferTaskAsync(
+                [taskId],
+                [FileJobStatuses.Running, FileJobStatuses.Pending, FileJobStatuses.Paused],
+                FileJobStatuses.Cancelled,
+                cancellationToken).ConfigureAwait(false);
+        }
+
 
         RaiseProgress(ToDto(record, device.DisplayName) with
         {
@@ -1698,6 +2231,15 @@ public sealed class TransferEngine : IDisposable
                     UpdatedAtUnixMs = now.ToUnixTimeMilliseconds(),
                 });
             }
+            // 取消很久了的记录：两端都处理完了（手机端删本地、电脑端不显示），
+            // 留着只会把列表接口的名额占满（真机：341 条 cancelled）。
+            var cancelledCutoff = now - _options.CancelledRetention;
+            var purged = await _repository.PurgeCancelledAsync(cancelledCutoff, CancellationToken.None)
+                .ConfigureAwait(false);
+            if (purged > 0)
+            {
+                Log.Information("回收已取消的传输记录 rows={Rows}", purged);
+            }
         }
         catch (Exception ex)
         {
@@ -1873,7 +2415,13 @@ public sealed class TransferEngine : IDisposable
             Completed = completed,
             Hashes = hashes,
             Written = written,
-            State = written > 0 ? TransferStates.Transferring : TransferStates.Preparing,
+            // **必须尊重数据库里的状态**：以前这里硬写成 transferring/preparing，
+            // 于是"先暂停、再开始推"的窗口里重建出一个活跃会话——电脑那边明明按了暂停，
+            // 手机一推块就被当成正常上传接受，"电脑拉手机的文件还是停不住"。
+            // 会话不在内存（手机重连、电脑重启、上传被中断过）时重建，暂停就是被抹掉的。
+            State = record.Status == TransferStates.Paused
+                ? TransferStates.Paused
+                : written > 0 ? TransferStates.Transferring : TransferStates.Preparing,
             CreatedAtUtc = record.CreatedAtUtc,
             LastActivityUtc = DateTimeOffset.UtcNow,
         };

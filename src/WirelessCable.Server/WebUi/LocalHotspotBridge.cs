@@ -18,4 +18,19 @@ public sealed class LocalHotspotBridge
 
     /// <summary>开不出来时给用户看的一句话原因。</summary>
     public Func<string>? UnavailableReason { get; set; }
+
+    /// <summary>
+    /// 关掉应用自己开的热点（用户手动开的不会动）。
+    ///
+    /// 用户在出码对话框里取消勾选时要调它：否则热点会一直广播到退出应用，
+    /// 笔记本白耗电；但只关"我们开的"，别把用户自己在系统设置里开的热点关掉。
+    /// 返回 true 表示这次真的关了——调用方据此剔除残留的热点网段地址。
+    /// </summary>
+    public Func<Task<bool>>? StopAsync { get; set; }
+
+    /// <summary>读"出码时是否开热点"的偏好（存在 settings.json 里）。</summary>
+    public Func<bool>? ReadPreference { get; set; }
+
+    /// <summary>记住用户这次的选择，下次出码沿用。</summary>
+    public Action<bool>? WritePreference { get; set; }
 }

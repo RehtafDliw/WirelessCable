@@ -144,6 +144,9 @@ class InboxViewModel(private val context: Context) : ViewModel() {
                     result += if (prefix.isEmpty()) entry else entry.copy(name = prefix + entry.name)
                 }
 
+                // 本地列举不会被"叫停"，仅是 sealed 穷尽性要求
+                FileResult.Halted -> Unit
+
                 is FileResult.Failure -> {
                     // 目录还不存在是正常状态（还没收到过文件），不当作错误
                     if (listed.status != FileStatus.NOT_FOUND) {

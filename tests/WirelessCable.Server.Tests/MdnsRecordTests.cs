@@ -121,12 +121,12 @@ public sealed class MdnsRecordTests
     [Fact]
     public void Profile_TxtCarriesAllCandidateAddresses()
     {
-        var addresses = new IPAddress[] { IPAddress.Parse("172.18.15.63"), IPAddress.Parse("172.17.13.108") };
+        var addresses = new IPAddress[] { IPAddress.Parse("192.0.2.63"), IPAddress.Parse("198.51.100.108") };
 
         var profile = MdnsAdvertiser.CreateProfile(Sample(addresses));
 
         var txt = Assert.Single(profile.Resources.OfType<TXTRecord>());
-        Assert.Contains(txt.Strings, s => s == "addrs=172.18.15.63,172.17.13.108");
+        Assert.Contains(txt.Strings, s => s == "addrs=192.0.2.63,198.51.100.108");
     }
 
     [Fact]

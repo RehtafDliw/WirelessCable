@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Windows;
 using Serilog;
@@ -44,6 +46,9 @@ public partial class WebUiWindow : Window
         }
 
         Log.Information("新版界面窗口创建 origin={Origin}", _origin);
+        // 句柄一就绪先按系统主题对一次：网页还没加载，否则深色模式下会先闪一条白标题栏。
+        // 具体颜色等前端挂载后通过 setWindowTheme 再精确覆盖。
+        SourceInitialized += (_, _) => ApplyWindowTheme(IsSystemDarkTheme(), null, null);
         Loaded += async (_, _) => await InitializeAsync();
         Closed += (_, _) => Log.Information("新版界面窗口已关闭");
     }
@@ -249,6 +254,31 @@ public partial class WebUiWindow : Window
                     return;
                 }
 
+                case "setWindowTheme":
+                {
+                    // 网页切主题时同步原生标题栏，否则深色界面顶上会挂着一条白色边框
+                    var theme = GetString(root, "theme");
+                    var background = GetString(root, "background");
+                    var text = GetString(root, "text");
+                    Log.Information("标题栏配色 theme={Theme} background={Background} text={Text}", theme, background, text);
+                    ApplyWindowTheme(
+                        string.Equals(theme, "dark", StringComparison.OrdinalIgnoreCase),
+                        background,
+                        text);
+                    Reply(id, true);
+                    return;
+                }
+
+                case "fileIcon":
+                {
+                    // 列表行首显示"系统默认图标"（文件夹 / exe / jpg 各是各的）。
+                    // 只按扩展名取，不需要文件真实存在——传输记录可能指向已删掉的文件。
+                    var ext = GetString(root, "ext") ?? string.Empty;
+                    var folder = GetString(root, "kind") == "folder";
+                    Reply(id, true, data: SystemIconDataUrl(ext, folder));
+                    return;
+                }
+
                 case "pickFiles":
                 {
                     // 不能在 WebMessageReceived 里同步弹模态框：WebView2 的回调还没返回，
@@ -424,7 +454,13 @@ public partial class WebUiWindow : Window
         thread.Start();
     }
 
-    private void Reply(string? id, bool ok, string? error = null, string? path = null, string[]? files = null)
+    private void Reply(
+        string? id,
+        bool ok,
+        string? error = null,
+        string? path = null,
+        string[]? files = null,
+        string? data = null)
     {
         Log.Information("宿主回包 id={Id} ok={Ok} error={Error} files={Count}", id, ok, error, files?.Length ?? 0);
         View.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(new
@@ -434,6 +470,7 @@ public partial class WebUiWindow : Window
             error,
             path,
             files,
+            data,
         }));
     }
 
@@ -452,6 +489,197 @@ public partial class WebUiWindow : Window
 
         Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
     }
+
+    // ---------------------------------------------------------------- 系统图标
+
+    private static readonly ConcurrentDictionary<string, string?> IconCache = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// 按扩展名取 Windows 的默认文件图标，返回 `data:image/png;base64,...`。
+    ///
+    /// 用 `SHGFI_USEFILEATTRIBUTES`：只要给个名字，**不需要文件真实存在**，
+    /// 系统就会按扩展名给出关联图标（.jpg 是照片查看器、.exe 是程序、.apk 是它的关联程序）。
+    /// 传输记录可能指向已经被移走的文件，靠真实路径取图标会失败。
+    /// </summary>
+    private static string? SystemIconDataUrl(string ext, bool folder)
+    {
+        var key = folder
+            ? "__folder__"
+            : string.IsNullOrWhiteSpace(ext) ? "__file__" : ext.ToLowerInvariant();
+
+        return IconCache.GetOrAdd(key, k => ExtractIcon(k, folder));
+    }
+
+    private static string? ExtractIcon(string key, bool folder)
+    {
+        try
+        {
+            // 探测名只要扩展名对得上就够了；文件夹给一个不带扩展名的路径
+            var probe = folder ? "folder" : "file" + (key.StartsWith('.') ? key : string.Empty);
+            var info = new SHFILEINFO();
+            var flags = ShgfiIcon | ShgfiUseFileAttributes;
+            var attributes = folder ? FileAttributeDirectory : FileAttributeNormal;
+
+            var result = SHGetFileInfo(
+                probe,
+                attributes,
+                ref info,
+                (uint)Marshal.SizeOf<SHFILEINFO>(),
+                flags);
+
+            if (result == IntPtr.Zero || info.hIcon == IntPtr.Zero)
+            {
+                return null;
+            }
+
+            try
+            {
+                // Icon.FromHandle 不接管句柄，用完必须自己 DestroyIcon，否则每次泄漏一个 GDI 对象
+                using var icon = System.Drawing.Icon.FromHandle(info.hIcon);
+                using var bitmap = icon.ToBitmap();
+                using var buffer = new MemoryStream();
+                bitmap.Save(buffer, System.Drawing.Imaging.ImageFormat.Png);
+                return "data:image/png;base64," + Convert.ToBase64String(buffer.ToArray());
+            }
+            finally
+            {
+                DestroyIcon(info.hIcon);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "提取系统图标失败 key={Key}", key);
+            return null;
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct SHFILEINFO
+    {
+        public IntPtr hIcon;
+        public int iIcon;
+        public uint dwAttributes;
+
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+        public string szDisplayName;
+
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 80)]
+        public string szTypeName;
+    }
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr SHGetFileInfo(
+        string pszPath,
+        uint dwFileAttributes,
+        ref SHFILEINFO psfi,
+        uint cbFileInfo,
+        uint uFlags);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool DestroyIcon(IntPtr hIcon);
+
+    private const uint ShgfiIcon = 0x00000100;
+    private const uint ShgfiUseFileAttributes = 0x00000010;
+    private const uint FileAttributeNormal = 0x00000080;
+    private const uint FileAttributeDirectory = 0x00000010;
+
+    // ---------------------------------------------------------------- 标题栏配色
+
+    /// <summary>
+    /// 让 Windows 原生标题栏和网页同色（"沉浸式"）。
+    ///
+    /// 两级手段：
+    /// <list type="number">
+    /// <item><c>DWMWA_USE_IMMERSIVE_DARK_MODE</c>（Win10 20H1+）—— 深色时系统自己把
+    /// 标题栏和按钮文字调整成深色系，老系统也能用；</item>
+    /// <item><c>DWMWA_CAPTION_COLOR</c> / <c>DWMWA_TEXT_COLOR</c>（Win11 22H2+）——
+    /// 精确指定成网页算出来的那个颜色，浅色下才不会比侧栏白一截。
+    /// 老系统上这两个属性返回 E_INVALIDARG，忽略即可。</item>
+    /// </list>
+    /// </summary>
+    private void ApplyWindowTheme(bool dark, string? background, string? text)
+    {
+        try
+        {
+            var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+            if (hwnd == IntPtr.Zero)
+            {
+                return;
+            }
+
+            var immersive = dark ? 1 : 0;
+            // 20 是正式版编号，19 是 20H1 预览版的旧编号，两个都试一次
+            if (DwmSetWindowAttribute(hwnd, DwmwaUseImmersiveDarkMode, ref immersive, sizeof(int)) != 0)
+            {
+                DwmSetWindowAttribute(hwnd, DwmwaImmersiveDarkModeLegacy, ref immersive, sizeof(int));
+            }
+
+            SetDwmColor(hwnd, DwmwaCaptionColor, background);
+            SetDwmColor(hwnd, DwmwaTextColor, text);
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "设置标题栏配色失败");
+        }
+    }
+
+    private static void SetDwmColor(IntPtr hwnd, int attribute, string? hex)
+    {
+        if (!TryParseColorRef(hex, out var colorRef))
+        {
+            return;
+        }
+
+        DwmSetWindowAttribute(hwnd, attribute, ref colorRef, sizeof(int));
+    }
+
+    /// <summary>把 `#RRGGBB` 转成 DWM 要的 COLORREF（0x00BBGGRR）。</summary>
+    private static bool TryParseColorRef(string? hex, out int colorRef)
+    {
+        colorRef = 0;
+        if (string.IsNullOrWhiteSpace(hex))
+        {
+            return false;
+        }
+
+        var text = hex.TrimStart('#');
+        if (text.Length != 6
+            || !int.TryParse(text, System.Globalization.NumberStyles.HexNumber, null, out var rgb))
+        {
+            return false;
+        }
+
+        var red = (rgb >> 16) & 0xFF;
+        var green = (rgb >> 8) & 0xFF;
+        var blue = rgb & 0xFF;
+        colorRef = (blue << 16) | (green << 8) | red;
+        return true;
+    }
+
+    /// <summary>读系统"应用使用浅色主题"设置，用于窗口刚出现时先对齐一次。</summary>
+    private static bool IsSystemDarkTheme()
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
+                @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
+
+            return key?.GetValue("AppsUseLightTheme") is int value && value == 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    [DllImport("dwmapi.dll", PreserveSig = true)]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
+
+    private const int DwmwaImmersiveDarkModeLegacy = 19;
+    private const int DwmwaUseImmersiveDarkMode = 20;
+    private const int DwmwaCaptionColor = 35;
+    private const int DwmwaTextColor = 36;
 
     /// <summary>打开目录或选中文件：文件用 /select 定位，目录直接打开。</summary>
     private static void OpenPath(string path)

@@ -264,8 +264,6 @@ object Str {
 
         // 空态与提示
         "删除后无法恢复。" to "This cannot be undone.",
-        "只删本机收到的文件。发出去的文件在电脑上，不会被删除；全选时若含发出去的记录，也只删记录。" to
-            "Only files received on this phone are deleted; files sent to the PC stay there. Records for sent files only lose the record.",
         "手机在线却列不出文件" to "Phone is online but lists no files",
         "已中断，会自动续传" to "Interrupted — resumes automatically",
         "已完成里的多选怎么点都没反应" to "Multi-select does nothing on completed items",
@@ -376,8 +374,11 @@ object Str {
         "。连上后这里会自动继续，不用切回来。" to ". It resumes automatically once connected; no need to switch back.",
         "会结束后台服务与所有连接。下次打开需要重新连电脑，不需要重新配对。" to "This stops the background service and all connections. Next launch you reconnect, but do not need to re-pair.",
         "到应用权限里打开它，再点「重新读取」；仍不行就重启一次应用" to "Grant it in app permissions, then tap Refresh; if it still fails, restart the app",
-        "只删本机收到的文件。发出去的文件在电脑上，不会被删除；全选时若含发出去的记录，也只删记录。" to "Only files received on this phone are deleted; files sent to the PC stay. Selecting everything only removes records for sent items.",
         "同时删除接收到的文件" to "Also delete received files",
+        "传输已被接收方取消" to "Cancelled by the other device",
+        "这条传输已经被对方删除，继续也不会再传。要删掉本机的这条记录吗？" to "The other device deleted this transfer, so resuming will not move any data. Delete the record here too?",
+        "删除记录" to "Delete the record",
+        "保留记录" to "Keep the record",
         "在列表里找到本应用，把电池优化设为「不优化」" to "Find this app in the list and set battery optimisation to Not optimised",
         "在打开的页面里点「耗电管理」，把后台限制设为「不限制」" to "On the page that opens, choose Battery usage and set background activity to Unrestricted",
         "安装" to "Install",
@@ -645,5 +646,23 @@ object Str {
         "重命名失败。" to "Failed to rename.",
         "（不可用）" to " (unavailable)",
         "默认接收目录" to "Default receive folder",
+
+        // 连接诊断
+        "连接诊断" to "Connection check",
+        "检查中…" to "Checking…",
+        "重新诊断" to "Run again",
+        "本机网络" to "This phone",
+        "同一网络" to "Same network",
+        "局域网发现" to "Discovery",
+        "端口连接" to "Port",
+        "证书与心跳" to "Certificate",
+        "没有可用的局域网地址" to "No LAN address",
+        "同网段但搜不到这台电脑" to "Same subnet, but this PC was not found",
+        "不在同一网段，搜不到是正常的" to "Different subnet, so not finding it is expected",
+        "端口拒绝连接（电脑上服务可能没开）" to "Port refused — the service may not be running",
+        "连接超时（包被丢弃）" to "Timed out — packets are being dropped",
+        "通过" to "OK",
+        "跳过（端口不通）" to "Skipped — port unreachable",
+        "没有配对记录" to "Not paired yet",
     )
 }

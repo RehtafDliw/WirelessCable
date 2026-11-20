@@ -44,6 +44,16 @@ public sealed class DesktopSettings
     /// <summary>电脑热点密码（8 位数字）。</summary>
     [JsonPropertyName("hotspotPassphrase")]
     public string? HotspotPassphrase { get; set; }
+
+    /// <summary>
+    /// 出配对码时是否同时开启电脑热点。
+    ///
+    /// 默认关：电脑靠 Wi-Fi 上网、网卡又不支持 STA+AP 并发时，开热点会把电脑自己踢下线
+    /// （实测过，见 docs/known-issues.md）。所以只在用户明确需要时开——
+    /// 手机和电脑不在同一网络（访客 Wi-Fi、AP 隔离、不同路由器）才需要它。
+    /// </summary>
+    [JsonPropertyName("hotspotOnPairing")]
+    public bool HotspotOnPairing { get; set; }
 }
 
 /// <summary>

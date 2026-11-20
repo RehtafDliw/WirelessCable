@@ -20,6 +20,9 @@ import com.wirelesscable.app.core.protocol.FileMoveRequest
 import com.wirelesscable.app.core.protocol.FileProtocol
 import com.wirelesscable.app.core.protocol.FileRenameRequest
 import com.wirelesscable.app.core.protocol.FileRootDto
+import com.wirelesscable.app.core.protocol.JobAckDto
+import com.wirelesscable.app.core.protocol.JobLeaseDto
+import com.wirelesscable.app.core.protocol.JobTaskAttachRequest
 import com.wirelesscable.app.core.protocol.ProtocolConstants
 import com.wirelesscable.app.core.protocol.TransferTask
 import com.wirelesscable.app.core.protocol.WcJson
@@ -231,6 +234,35 @@ class FileApi private constructor(
             val body = WcJson.instance.encodeToString(result).toRequestBody(JSON_MEDIA)
             executeJson(
                 buildRequest("${FileProtocol.DEVICE_JOBS_PATH}/$jobId/result", token)
+                    .post(body)
+                    .build(),
+            )
+        }
+
+    /**
+     * 续租 + 取控制指令。
+     *
+     * 返回作业当前状态：`running` 继续，`paused`/`cancelled` 立刻停手，
+     * `gone` 表示作业已经不在队列里。暂停/取消就是这样"打到"手机上的。
+     */
+    suspend fun leaseJob(token: String, jobId: String): ApiOutcome<JobLeaseDto> =
+        withContext(Dispatchers.IO) {
+            val empty = ByteArray(0).toRequestBody(JSON_MEDIA)
+            executeJson(
+                buildRequest("${FileProtocol.DEVICE_JOBS_PATH}/$jobId/lease", token)
+                    .post(empty)
+                    .build(),
+            )
+        }
+
+    /** 把建出来的传输任务挂到作业上：暂停后继续要认出上次那个任务，别重复建。 */
+    suspend fun attachJobTask(token: String, jobId: String, taskId: String): ApiOutcome<JobAckDto> =
+        withContext(Dispatchers.IO) {
+            val body = WcJson.instance
+                .encodeToString(JobTaskAttachRequest(taskId))
+                .toRequestBody(JSON_MEDIA)
+            executeJson(
+                buildRequest("${FileProtocol.DEVICE_JOBS_PATH}/$jobId/task", token)
                     .post(body)
                     .build(),
             )

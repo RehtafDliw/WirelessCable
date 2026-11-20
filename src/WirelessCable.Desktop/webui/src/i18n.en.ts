@@ -151,6 +151,15 @@ export const EN: Record<string, string> = {
   '重新开始': 'Restart',
   '整批重新开始': 'Restart the whole batch',
   '已继续传输': 'Resumed',
+  '下载手机版': 'Get the phone app',
+  '在手机上打开这个链接，下载并安装手机版':
+    'Open this link on your phone to download and install the phone app',
+  '传输已被接收方取消': 'Cancelled by the other device',
+  '这些任务已经结束，没有可继续的': 'These tasks are already finished — nothing to resume',
+  '保留记录': 'Keep the record',
+  '删除这条记录': 'Delete this record',
+  '这条传输已经被对方删除，继续也不会再传。要删掉本机的这条记录吗？':
+    'The other device deleted this transfer, so resuming will not move any data. Delete the record here too?',
   '已排队，手机连上后会自动保存到接收目录':
     'Queued; it will be saved once the phone reconnects',
   '这个文件已在等待手机接收': 'This file is already waiting for the phone',
@@ -192,7 +201,6 @@ export const EN: Record<string, string> = {
   '所选项目不支持删除': 'The selection cannot be deleted',
   '所选项目不支持复制': 'The selection cannot be copied',
   '所选项目不支持移动': 'The selection cannot be moved',
-  '所选记录里没有本机收到的文件。': 'None of the selected records are files received here.',
   '打开这个文件': 'Open this file',
   '打不开这个文件': 'Cannot open this file',
   '打不开这个路径': 'Cannot open this path',
@@ -256,6 +264,13 @@ export const EN: Record<string, string> = {
   '设计令牌': 'Design tokens',
   '调试接口': 'Debug endpoints',
   '本机界面地址': 'Local UI address',
+  '诊断包': 'Diagnostics',
+  '版本、状态、最近日志与请求统计': 'Version, state, recent logs and request stats',
+  '导出': 'Export',
+  '诊断包已导出': 'Diagnostics exported',
+  '包含文件名（默认隐藏）': 'Include file names (hidden by default)',
+  '设备名会被替换成编号。分享前自己过一遍。':
+    'Device names are replaced with numbers. Review before sharing.',
   '协议版本': 'Protocol version',
   '服务状态': 'Service status',
   '服务运行中': 'Service running',
@@ -287,7 +302,19 @@ export const EN: Record<string, string> = {
   '已改名': 'Renamed',
   '已拒绝': 'Denied',
   '正在准备热点…': 'Preparing hotspot…',
+  '用热点直连': 'Connect over hotspot',
+  '当前网络传不动时打开。手机连不上会改用这个热点。':
+    'Turn on when the current network cannot reach the phone. The phone will fall back to this hotspot.',
   '出码失败': 'Could not generate the QR code',
+  // 服务端原样返回的热点原因（整句就是 key）
+  '电脑热点开启失败，手机可连同一 Wi-Fi':
+    'Could not start the PC hotspot. The phone can join the same Wi-Fi instead.',
+  '电脑热点不可用，手机可连同一 Wi-Fi':
+    'PC hotspot unavailable. The phone can join the same Wi-Fi instead.',
+  '无法开热点：电脑需要一个可共享的网络（网线或 Wi-Fi）':
+    'Cannot start a hotspot: the PC needs a shareable network (Ethernet or Wi-Fi).',
+  '热点地址还没就绪，请点「重新生成」':
+    'The hotspot address is not ready yet. Tap “Regenerate”.',
   '桌面端没有响应': 'The desktop app is not responding',
   '缺少路径': 'Missing path',
   '未知动作': 'Unknown action',
@@ -344,8 +371,6 @@ export const EN: Record<string, string> = {
   '还没有配对设备，先配对再授权。': 'No paired devices yet — pair first, then grant.',
   '配对码': 'Pair code',
   '只删共享记录与授权，目录与里面的文件不会被删除。': 'Only the share and its grants are removed; the folder and the files inside stay.',
-  '只删手机传过来、已经落到本机的文件；本机发出去的原文件不会被删除。': 'Only files received from the phone are deleted; files you sent from this PC stay.',
-  '只删记录和本机收到的文件；手机上的原件、电脑发出的原文件都不动。': 'Only records and files received here are deleted; originals on the phone and files sent from the PC stay.',
   '删除后记录与授权一并清除，需要重新配对；已接收的文件保留。': 'This clears the pairing and grants too — you will need to pair again. Received files are kept.',
   '复制界面地址': 'Copy UI address',
   '已过期，请重新生成': 'Expired — generate a new one',
@@ -391,6 +416,7 @@ export const EN_RULES: Array<[RegExp, (m: RegExpMatchArray) => string]> = [
   [/^删除整批（(\d+) 个文件）$/, (m) => `Delete the whole batch (${m[1]} files)`],
   [/^已删除 (\d+) 条记录$/, (m) => `Deleted ${m[1]} records`],
   [/^已删除 (\d+) 条，(\d+) 条被跳过：(.+)$/, (m) => `Deleted ${m[1]}, skipped ${m[2]}: ${m[3]}`],
+  [/^（(\d+) 条正在传输，已取消）$/, (m) => ` (${m[1]} still transferring — cancelled)`],
   [/^已交给 (.+)：(\d+) 个文件$/, (m) => `Sent to ${m[1]}: ${m[2]} files`],
   [/^已完成 (\d+)\/(\d+) · ?$/, (m) => `Done ${m[1]}/${m[2]} · `],
   [/^已完成 (\d+)$/, (m) => `Completed ${m[1]}`],
@@ -446,11 +472,14 @@ export const EN_RULES: Array<[RegExp, (m: RegExpMatchArray) => string]> = [
   [/^传输中 (\d+)$/, (m) => `Transferring ${m[1]}`],
   [/^「(.+)」文件太多，只取了前 1000 个$/, (m) => `Too many files in “${m[1]}”; only the first 1000 were used`],
   [/^「(.+)」里有循环引用或越界路径，已跳过那部分$/, (m) => `“${m[1]}” contains a loop or an out-of-range path; that part was skipped`],
+  // 出码对话框里的热点凭据：SSID 与密码是动态值，只能走规则
+  [/^备用热点 (.+) · 密码 (.+)$/, (m) => `Backup hotspot ${m[1]} · password ${m[2]}`],
   [/^已交给 (.+)：(\d+) 个文件$/, (m) => `Sent to ${m[1]}: ${m[2]} files`],
   [/^已交给手机 (\d+) 个文件(.*)，(\d+) 条失败：(.+)$/, (m) => `Sent ${m[1]} files to the phone${m[2]}, ${m[3]} failed: ${m[4]}`],
   [/^已交给手机 (\d+) 个文件(.*)，保存到接收目录$/, (m) => `Sent ${m[1]} files to the phone${m[2]}, saved to the receive folder`],
   [/^已删除 (\d+) 条记录$/, (m) => `Deleted ${m[1]} records`],
   [/^已删除 (\d+) 条，(\d+) 条被跳过：(.+)$/, (m) => `Deleted ${m[1]} records, ${m[2]} skipped: ${m[3]}`],
+  [/^（(\d+) 条正在传输，已取消）$/, (m) => ` (${m[1]} still transferring — cancelled)`],
   [/^已完成 (\d+)$/, (m) => `Completed ${m[1]}`],
   [/^已完成 (\d+)\/(\d+) · $/, (m) => `Completed ${m[1]}/${m[2]} · `],
   [/^删除 (\d+) 条传输记录$/, (m) => `Delete ${m[1]} transfer records`],

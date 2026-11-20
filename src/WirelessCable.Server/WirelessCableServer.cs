@@ -87,6 +87,13 @@ public sealed class WirelessCableServer : IAsyncDisposable
         _sharedDirectories = new SharedDirectoryRepository(databaseFactory);
         _directoryResolver = new SharedDirectoryResolver(_sharedDirectories, sharedDirectory);
 
+        // 先建 FileService：删传输记录时要顺手作废这批还没执行的作业，
+        // 不注入的话"删了记录又被队列重建出来"（真机：删完整批又冒出 30 条）。
+        _files = new FileService(
+            _sharedDirectories,
+            new DeviceFileRepository(databaseFactory),
+            root => new LocalFileProvider(root));
+
         _transfers = new TransferEngine(
             new TransferRepository(databaseFactory),
             new TransferOptions
@@ -95,12 +102,8 @@ public sealed class WirelessCableServer : IAsyncDisposable
                 TempDirectory = paths.TransferTempDirectory,
                 DefaultChunkSize = ProtocolConstants.ChunkSizeBytes,
             },
-            _directoryResolver);
-
-        _files = new FileService(
-            _sharedDirectories,
-            new DeviceFileRepository(databaseFactory),
-            root => new LocalFileProvider(root));
+            _directoryResolver,
+            _files);
     }
 
     /// <summary>传输引擎。桌面端界面从这里取任务、发起发送。</summary>
@@ -267,7 +270,7 @@ public sealed class WirelessCableServer : IAsyncDisposable
     /// 电脑热点（可选）。手机不在同一网络时由桌面端先开热点，再把凭据放进二维码，
     /// 手机扫码后先连热点再配对。为 null 时二维码与旧版本完全一致。
     /// </param>
-    public PairingQr? CreatePairingQr(QrHotspotDto? hotspot = null)
+    public PairingQr? CreatePairingQr(QrHotspotDto? hotspot = null, bool dropStaleHotspotSubnet = false)
     {
         var snapshot = _runtime.Snapshot();
         var identity = _runtime.Identity;
@@ -286,7 +289,8 @@ public sealed class WirelessCableServer : IAsyncDisposable
             snapshot.Addresses,
             snapshot.Port.Value,
             snapshot.Fingerprint,
-            hotspot);
+            hotspot,
+            dropStaleHotspotSubnet);
 
         var text = QrPairingService.Serialize(payload);
         return new PairingQr(text, QrPairingService.CreatePng(text), payload.ExpiresAtUnixMs);
@@ -579,6 +583,9 @@ public sealed class WirelessCableServer : IAsyncDisposable
         builder.Services.AddSingleton(_options);
         builder.Services.AddSingleton(_runtime);
         builder.Services.AddSingleton(_databaseFactory);
+        // 诊断服务要读路径（库、日志）和运行态，两者都已在容器里；它自己无状态。
+        builder.Services.AddSingleton(_paths);
+        builder.Services.AddSingleton<Diagnostics.DiagnosticsService>();
         builder.Services.AddSingleton(_devices);
         builder.Services.AddSingleton(_appConfig);
         builder.Services.AddSingleton(new FixedWindowRateLimiter(_options.RateLimitPerMinute));
@@ -589,6 +596,9 @@ public sealed class WirelessCableServer : IAsyncDisposable
         builder.Services.AddSingleton(_sharedDirectories);
         builder.Services.AddSingleton(_directoryResolver);
         builder.Services.AddSingleton(_files);
+        // 本机界面要统计"每个落点目录还有多少作业没跑完"（判断一批到底结束没有）。
+        // 仓储无状态，只是包了一层 databaseFactory，单独注册一份即可。
+        builder.Services.AddSingleton(new DeviceFileRepository(_databaseFactory));
         builder.Services.AddSingleton<LocalUiSession>();
         builder.Services.AddSingleton(_hotspotBridge);
         // 端点要调 CreatePairingQr / SetReceivedDirectory，把宿主自己注册进去

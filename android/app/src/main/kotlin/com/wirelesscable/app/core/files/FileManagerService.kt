@@ -11,15 +11,52 @@ import com.wirelesscable.app.core.protocol.FileJobResult
 import com.wirelesscable.app.core.protocol.FileProtocol
 import com.wirelesscable.app.core.protocol.WcJson
 import com.wirelesscable.app.core.transfer.TransferResult
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
+
+/**
+ * 作业租约的续租间隔。
+ *
+ * 服务端的租约是 30 秒（`ProtocolConstants.JobLeaseSeconds`），这里 8 秒续一次，
+ * 允许三次丢包仍不判过期。改小会更灵敏但更费电，改大则暂停后要等更久才停。
+ */
+private const val JOB_LEASE_HEARTBEAT_MS = 8_000L
 
 /** 一轮作业执行的结果。executed 用来决定要不要立刻重报索引。 */
 data class JobRunSummary(
     val executed: Int,
     val failures: Int,
     val firstError: String?,
+    /**
+     * 这批作业有没有**改动手机上的目录**。
+     *
+     * 只有增删改移才需要让电脑端立刻看到新索引；`download` / `upload` / `list`
+     * 只读写文件内容，目录树没变。以前一律重报，整机根 3700 条每 8 个文件就传一次，
+     * 传输过程中每批之间都会卡一两秒，也白耗流量和电。
+     */
+    val mutated: Boolean = false,
+)
+
+/**
+ * 会改变手机目录树的作业类型。
+ *
+ * 只有这些执行完要立刻重报索引——否则电脑端会"操作成功但列表没变"。
+ * 传输类作业（download / upload / list）不算。
+ */
+private val MUTATING_OPERATIONS = setOf(
+    FileProtocol.OP_CREATE,
+    FileProtocol.OP_RENAME,
+    FileProtocol.OP_DELETE,
+    FileProtocol.OP_MOVE,
+    FileProtocol.OP_COPY,
 )
 
 /**
@@ -199,6 +236,9 @@ class FileManagerService(
                     continue
                 }
 
+                // 本地列举不会被"叫停"，这只是 sealed 穷尽性要求
+                FileResult.Halted -> continue
+
                 is FileResult.Success -> {
                     for (entry in listing.value.orEmpty()) {
                         if (result.size >= maxEntries) break
@@ -249,6 +289,7 @@ class FileManagerService(
 
         var failures = 0
         var firstError: String? = null
+        var mutated = false
 
         for (job in jobs) {
             // list 要带数据回来，走单独一条路：结果里塞目录条目的 JSON
@@ -256,17 +297,28 @@ class FileManagerService(
 
             // 单个作业抛异常不能掀掉整轮：以前一个 SAF 异常会让当前作业不回报、
             // 后面的作业也不执行，电脑端只能对着"等待手机执行"干等到超时。
-            val result = try {
+            if (job.operation in MUTATING_OPERATIONS) {
+                mutated = true
+            }
+
+            // 执行期间保持租约：电脑一暂停/取消，下一次续约就会失败，
+            // 这里立刻停手且**不回报结果**（状态由服务端定），
+            // 于是"一次领 3 个"也不会出现"领走就停不下来"。
+            val result = runJobWithLease(token, job) {
                 if (job.operation == FileProtocol.OP_LIST) {
                     val listed = listDirectoryForJob(job)
                     payload = listed.payload
                     listed.result
                 } else {
-                    executeJob(job)
+                    executeJob(job, token)
                 }
-            } catch (error: Throwable) {
-                Log.w(TAG, "作业执行失败 job=${job.jobId} op=${job.operation}", error)
-                FileResult.ioFailure(error.message ?: "手机上执行这个操作时出错了。")
+            } ?: continue
+
+            // 被服务端叫停：**不回报**。回报会把服务端刚写好的 paused/cancelled
+            // 覆盖成 failed，用户随后点「继续」就找不到它了。
+            if (result is FileResult.Halted) {
+                Log.i(TAG, "作业被叫停，跳过回报 job=${job.jobId}")
+                continue
             }
 
             if (result is FileResult.Failure) {
@@ -289,7 +341,82 @@ class FileManagerService(
             }
         }
 
-        JobRunSummary(jobs.size, failures, firstError)
+        JobRunSummary(jobs.size, failures, firstError, mutated)
+    }
+
+    /**
+     * 带着租约执行一个作业。
+     *
+     * 心跳协程每 [JOB_LEASE_HEARTBEAT_MS] 续一次租；服务端返回非 running（暂停/取消/回收）
+     * 或者续租请求失败，就取消执行协程并返回 null —— 调用方据此**跳过回报**，
+     * 避免把服务端刚设好的 paused/cancelled 又覆盖成 failed。
+     */
+    private suspend fun runJobWithLease(
+        token: String,
+        job: FileJobDto,
+        block: suspend () -> FileResult<Unit>,
+    ): FileResult<Unit>? = supervisorScope {
+        val work = async {
+            try {
+                block()
+            } catch (e: CancellationException) {
+                null
+            } catch (error: Throwable) {
+                Log.w(TAG, "作业执行失败 job=${job.jobId} op=${job.operation}", error)
+                FileResult.ioFailure(error.message ?: "手机上执行这个操作时出错了。")
+            }
+        }
+
+        val beat = launch {
+            var misses = 0
+            while (isActive) {
+                delay(JOB_LEASE_HEARTBEAT_MS)
+                when (val leased = api.leaseJob(token, job.jobId)) {
+                    is ApiOutcome.Success -> {
+                        misses = 0
+                        if (leased.value.status != FileProtocol.JOB_RUNNING) {
+                            Log.i(TAG, "作业被叫停 job=${job.jobId} op=${job.operation} status=${leased.value.status}")
+
+                            // **联动传输任务**：作业是"电脑下发的待办"，传输任务是"正在传的数据"。
+                            // 只停作业、传输任务还活着 —— 手机端列表里那条还在、服务端也还当它在传
+                            // （真机：电脑取消作业，手机这边还显示、还在传）。
+                            // 暂停/取消要作用在两层上。
+                            val taskId = job.transferTaskId
+                            val engine = transfers
+                            if (!taskId.isNullOrEmpty() && engine != null) {
+                                when (leased.value.status) {
+                                    FileProtocol.JOB_PAUSED -> engine.pause(taskId)
+                                    FileProtocol.JOB_CANCELLED -> engine.cancelAll(listOf(taskId))
+                                    else -> Unit
+                                }
+                                Log.i(
+                                    TAG,
+                                    "传输任务已随作业同步 job=${job.jobId} task=$taskId status=${leased.value.status}",
+                                )
+                            }
+
+                            work.cancel()
+                            break
+                        }
+                    }
+
+                    is ApiOutcome.Failure -> {
+                        // 一次网络抖动不该让传输白停：连续三次（24 秒）都续不上才收手。
+                        // 真停了也没关系——作业还在服务端，租约过期后按超时规则回收。
+                        misses++
+                        if (misses >= 3) {
+                            Log.w(TAG, "续租连续失败，停止作业 job=${job.jobId}：${leased.message}")
+                            work.cancel()
+                            break
+                        }
+                    }
+                }
+            }
+        }
+
+        val out = work.await()
+        beat.cancel()
+        out
     }
 
     /**
@@ -314,6 +441,8 @@ class FileManagerService(
 
         return when (val listed = provider.list(path)) {
             is FileResult.Failure -> ListJobOutcome(listed)
+            // 本地列举不会被"叫停"；出现就说明上下文已经变了，当失败回报
+            FileResult.Halted -> ListJobOutcome(FileResult.ioFailure("已停止。"))
             is FileResult.Success -> {
                 val entries = listed.value.map { entry ->
                     FileEntryDto(
@@ -337,7 +466,8 @@ class FileManagerService(
     )
 
     /** 执行单个作业。 */
-    private suspend fun executeJob(job: FileJobDto): FileResult<Unit> {        val roots = grants.activeRoots()
+    private suspend fun executeJob(job: FileJobDto, token: String): FileResult<Unit> {
+        val roots = grants.activeRoots()
         val root = roots.firstOrNull { it.rootId == job.rootId }
             ?: return FileResult.failure(
                 FileStatus.AUTHORIZATION_REVOKED,
@@ -423,24 +553,45 @@ class FileManagerService(
                 } else {
                     when (val located = provider.uriFor(job.sourcePath ?: "")) {
                         is FileResult.Failure -> located
+                        // 本地解析不会被"叫停"；出现就原样往上抛
+                        FileResult.Halted -> FileResult.Halted
                         is FileResult.Success -> {
-                            // 电脑指定了落点目录就落到那里；没指定就是默认接收目录（按设备名分文件夹）。
-                            //
-                            // 文件夹下载：电脑把「接收目录下的相对子目录」放在 destinationPath 里
-                            // （例如「相册/2024」），这里原样传给上传，由服务端建出同样的层级。
-                            // 老电脑端不传这个字段，仍然是平铺——向后兼容（1.5.59）。
-                            val outcome = engine.upload(
-                                located.value,
-                                directoryId = job.destinationDirectoryId,
-                                relativeDirectory = job.destinationPath,
-                            )
+                            // 上次传到一半（暂停/中断后被重新取走）：接着传那个任务。
+                            // 不认这个 taskId 的话会再建一个同名任务 —— 列表两条、文件传两遍。
+                            val resumedTask = job.transferTaskId
+                            // allowResume = false：作业执行是自动流程，不能把电脑那边
+                            // 刚按下的暂停解掉（resume 对 paused 是"成功"的）。
+                            val outcome = if (!resumedTask.isNullOrEmpty()) {
+                                engine.resumeUpload(resumedTask, allowResume = false)
+                            } else {
+                                engine.upload(
+                                    located.value,
+                                    directoryId = job.destinationDirectoryId,
+                                    relativeDirectory = job.destinationPath,
+                                    // 电脑知道整批多少个，随作业带过来；手机据此显示真进度
+                                    batchTotal = job.batchTotal ?: 0,
+                                    batchName = job.batchName,
+                                    batchTotalBytes = job.batchTotalBytes ?: 0L,
+                                    // 建完立刻回写：暂停后继续要靠它认出这个任务。
+                                    // 用 runBlocking 是因为回调不是挂起函数，而这次往返
+                                    // 只有几十毫秒，赶在第一个分块之前完成才不会丢关联。
+                                    onTaskCreated = { taskId ->
+                                        runCatching {
+                                            runBlocking { api.attachJobTask(token, job.jobId, taskId) }
+                                        }.onFailure {
+                                            Log.w(TAG, "回写作业任务失败 job=${job.jobId}", it)
+                                        }
+                                    },
+                                )
+                            }
                             when (outcome) {
                                 is TransferResult.Ok -> FileResult.success(Unit)
                                 is TransferResult.Failed ->
                                     FileResult.failure(FileStatus.IO_FAILURE, outcome.code, outcome.message)
                                 is TransferResult.Interrupted ->
                                     FileResult.ioFailure("传输中断，稍后可在手机上继续。")
-                                TransferResult.Cancelled -> FileResult.ioFailure("传输已取消。")
+                                // 服务端暂停/取消：作业状态由服务端写，回报会覆盖成 failed
+                                TransferResult.Cancelled -> FileResult.Halted
                             }
                         }
                     }
