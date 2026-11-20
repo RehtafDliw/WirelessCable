@@ -1,46 +1,59 @@
 #!/usr/bin/env bash
 # 组装交付目录 WirelessCable-Release/。
 #
+# **交付目录里永远只有三个文件，且都带版本号**：
+#
+#   WirelessCable-<version>.exe            电脑端（单文件，可直接运行）
+#   WirelessCable-<version>.apk            手机端安装包
+#   WirelessCable-<version>-portable.zip   电脑端便携版（解压即用）
+#
+# 规则（别改）：
+#   - 文件名**必须带版本号**：交付目录会同时留着好几版，带版本号才不会拿错；
+#     不带版本号的同名文件（比如 WirelessCable.exe / WirelessCable.apk）
+#     永远不进这个目录——它们是运行时资源，住在各自的程序目录里。
+#   - 每次运行**先清空**交付目录：保证"只有这三个"不会因为历史残留而破功。
+#   - 校验和打印到终端，不落盘：目录里多一个文件就破规矩了。
+#
 # 前置（缺任何一项直接失败，不生成半成品）：
-#   dist/WirelessCable-<version>.exe                      scripts/build-desktop.sh
-#   android/app/build/outputs/apk/release/app-release.apk  gradle :app:assembleRelease
-#   docs/release/*.md                                      本仓库文档
+#   dist/WirelessCable-<version>.exe              scripts/build-desktop.sh
+#   dist/WirelessCable-<version>-portable/        scripts/build-desktop.sh
+#   android/app/build/outputs/apk/release/app-release.apk
+#                                               scripts/build-android.sh --release
 #
 # 用法：
-#   scripts/package-release.sh              完整交付包（单文件 + 绿色版 + APK + 文档）
-#   scripts/package-release.sh --minimal    精简包：WirelessCable.exe + WirelessCable.apk
-#                                           **平铺在交付目录根下**，两个文件直接拿走就能测
-#
-# 精简包不复制文档与绿色版：文档源在 docs/release/，绿色版就是同一个 exe 配 Data/ 目录，
-# 需要时用完整模式重新生成即可。
+#   scripts/package-release.sh
 set -euo pipefail
-
-MINIMAL=0
-for arg in "$@"; do
-    case "$arg" in
-        --minimal) MINIMAL=1 ;;
-        *) echo "未知参数：$arg" >&2; exit 2 ;;
-    esac
-done
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="$(sed -n 's/.*<Version>\(.*\)<\/Version>.*/\1/p' "$ROOT/Directory.Build.props" | head -1)"
-OUT="$ROOT/WirelessCable-Release"
+if [ -z "$VERSION" ]; then
+    echo "在 Directory.Build.props 里找不到 <Version>，无法确定产物名。" >&2
+    exit 1
+fi
 
+OUT="$ROOT/WirelessCable-Release"
 EXE="$ROOT/dist/WirelessCable-$VERSION.exe"
 APK="$ROOT/android/app/build/outputs/apk/release/app-release.apk"
+PORTABLE_DIR="$ROOT/dist/WirelessCable-$VERSION-portable"
+PORTABLE_ZIP="$OUT/WirelessCable-$VERSION-portable.zip"
 
-if [ ! -f "$EXE" ]; then
-    echo "缺少桌面端产物：$EXE（先跑 scripts/build-desktop.sh）" >&2
+for f in "$EXE" "$APK"; do
+    if [ ! -f "$f" ]; then
+        echo "缺少产物：$f" >&2
+        case "$f" in
+            *.exe) echo "  先跑 scripts/build-desktop.sh" >&2 ;;
+            *.apk) echo "  先跑 scripts/build-android.sh --release" >&2 ;;
+        esac
+        exit 1
+    fi
+done
+
+if [ ! -d "$PORTABLE_DIR" ]; then
+    echo "缺少便携版目录：$PORTABLE_DIR（先跑 scripts/build-desktop.sh）" >&2
     exit 1
 fi
 
-if [ ! -f "$APK" ]; then
-    echo "缺少 Android 正式包：$APK（先跑 :app:assembleRelease）" >&2
-    exit 1
-fi
-
-echo "==> 组装 WirelessCable-Release（$VERSION$([ "$MINIMAL" = 1 ] && echo '，精简包')）"
+echo "==> 组装交付目录（$VERSION）"
 
 # 清空上一版产物。这里不能因为删不掉就整体失败：
 # 某些环境把 rm 重定向到回收站，目录被占用时回收站操作会 abort，
@@ -48,62 +61,54 @@ echo "==> 组装 WirelessCable-Release（$VERSION$([ "$MINIMAL" = 1 ] && echo '�
 rm -rf "$OUT" 2>/dev/null || true
 mkdir -p "$OUT"
 
-# 1) 单文件版。精简包平铺在根目录（不套子目录，拷走就能测）
-if [ "$MINIMAL" = 1 ]; then
-    cp -f "$EXE" "$OUT/WirelessCable.exe"
-else
-    mkdir -p "$OUT/Windows" "$OUT/Android"
-    mkdir -p "$OUT/Windows/SingleFile" "$OUT/Windows/Portable" "$OUT/Documentation"
-    cp -f "$EXE" "$OUT/Windows/SingleFile/WirelessCable.exe"
+# 1) 电脑端单文件
+cp -f "$EXE" "$OUT/WirelessCable-$VERSION.exe"
 
-    # 2) 绿色版：程序 + 三个数据目录 + 便携标记
-    cp -f "$EXE" "$OUT/Windows/Portable/WirelessCable.exe"
-    mkdir -p "$OUT/Windows/Portable/Data" \
-             "$OUT/Windows/Portable/Logs" \
-             "$OUT/Windows/Portable/TransferTemp"
-    cat > "$OUT/Windows/Portable/portable.marker" <<'EOF'
-此文件表示当前目录是绿色版（便携版）。
-程序会把数据库、证书、接收文件放在 Data\，日志放在 Logs\，传输临时文件放在 TransferTemp\。
-不要删除它：只删 Data\ 想重置数据时，程序仍然认自己是便携版。
-EOF
+# 2) 手机端安装包
+cp -f "$APK" "$OUT/WirelessCable-$VERSION.apk"
+
+# 3) 便携版 zip
+#
+# 便携版里**要带一份 WirelessCable.apk**（不带版本号）：它是运行时资源——
+# 桌面端侧栏的「下载手机版」就是从程序目录旁边取它，手机浏览器才能装新版。
+# 用户拿到便携版解压到任何地方，这个下载入口都得能用。
+#
+# 便携版目录里的 Data / Logs / settings.json / TransferTemp 是用户自己的数据，
+# 不能进 zip（会把别人的传输记录和证书一起发出去）。
+python - "$PORTABLE_DIR" "$PORTABLE_ZIP" "$APK" <<'PYEOF'
+import os, sys, zipfile
+
+src_dir, out_zip, apk = sys.argv[1], sys.argv[2], sys.argv[3]
+skip = {'Data', 'Logs', 'TransferTemp', 'settings.json'}
+
+with zipfile.ZipFile(out_zip, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as z:
+    for base, dirs, files in os.walk(src_dir):
+        rel = os.path.relpath(base, src_dir).replace('\\', '/')
+        if rel == '.':
+            rel = ''
+        dirs[:] = [d for d in dirs if d not in skip]
+        for f in files:
+            z.write(os.path.join(base, f), (rel + '/' + f) if rel else f)
+    # 运行时资源：手机版安装包
+    z.write(apk, 'WirelessCable.apk')
+PYEOF
+
+# 4) 校验和：**只打印到终端**，不落盘——
+#    交付目录里多一个文件就破"只有三个"的规矩。
+echo
+echo "==> SHA-256"
+for f in "$OUT/WirelessCable-$VERSION.exe" "$OUT/WirelessCable-$VERSION.apk" "$PORTABLE_ZIP"; do
+    printf '%s  %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "$(basename "$f")"
+done
+
+echo
+echo "==> 交付目录内容（应当只有三个带版本号的文件）"
+ls -1 "$OUT"
+COUNT="$(find "$OUT" -maxdepth 1 -type f | wc -l | tr -d ' ')"
+if [ "$COUNT" != "3" ]; then
+    echo "错误：交付目录里有 $COUNT 个文件，应为 3 个" >&2
+    exit 1
 fi
 
-# 3) Android 正式包（必须是签名过的 release，不能用 debug）
-if [ "$MINIMAL" = 1 ]; then
-    cp -f "$APK" "$OUT/WirelessCable.apk"
-else
-    cp -f "$APK" "$OUT/Android/WirelessCable.apk"
-fi
-
-# 4) 文档（精简包不带）
-if [ "$MINIMAL" = 0 ]; then
-    cp -f "$ROOT/docs/release/README.md"        "$OUT/Documentation/README.md"
-    cp -f "$ROOT/docs/release/UserGuide.md"     "$OUT/Documentation/UserGuide.md"
-    cp -f "$ROOT/docs/release/Architecture.md"  "$OUT/Documentation/Architecture.md"
-    cp -f "$ROOT/docs/release/Protocol.md"      "$OUT/Documentation/Protocol.md"
-    cp -f "$ROOT/docs/release/Security.md"      "$OUT/Documentation/Security.md"
-    cp -f "$ROOT/docs/release/Compatibility.md" "$OUT/Documentation/Compatibility.md"
-    cp -f "$ROOT/docs/release/Changelog.md"     "$OUT/Documentation/Changelog.md"
-fi
-
-# 5) 校验清单：把产物的哈希写进交付目录，便于用户核对
-(
-    cd "$OUT"
-    {
-        echo "# SHA-256（$VERSION，生成于 $(date '+%Y-%m-%d %H:%M:%S')）"
-        if [ "$MINIMAL" = 1 ]; then
-            targets=(WirelessCable.exe WirelessCable.apk)
-        else
-            targets=(Windows/SingleFile/WirelessCable.exe Windows/Portable/WirelessCable.exe Android/WirelessCable.apk)
-        fi
-
-        for f in "${targets[@]}"; do
-            printf '%s  %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "$f"
-        done
-    } > SHA256SUMS.txt
-)
-
-echo "==> 目录结构"
-find "$OUT" -maxdepth 3 -printf '%y %-52p %10s\n' 2>/dev/null | sed "s#$OUT#WirelessCable-Release#" || ls -R "$OUT"
 echo
 echo "==> 完成：$OUT"

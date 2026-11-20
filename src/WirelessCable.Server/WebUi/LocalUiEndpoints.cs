@@ -93,9 +93,14 @@ public static class LocalUiEndpoints
             var version = runtime.Snapshot().AppVersion;
             var baseDir = AppContext.BaseDirectory;
 
+            // 依次找：便携版同目录的（不带版本号，是运行时资源）、
+            // 交付目录里带版本号的、开发机的 dist 目录。
+            // 交付目录里**只放带版本号的文件**（见 scripts/package-release.sh），
+            // 所以带版本号那条必须排在前面兜住。
             var candidates = new[]
             {
                 Path.Combine(baseDir, "WirelessCable.apk"),
+                Path.Combine(baseDir, $"WirelessCable-{version}.apk"),
                 Path.Combine(baseDir, "..", "dist", $"WirelessCable-{version}.apk"),
             };
 

@@ -45,6 +45,11 @@ and language).
 The desktop sidebar has **Get the phone app**: the phone downloads and installs the APK straight
 from its browser, no cable needed.
 
+**Release packages**: `WirelessCable-Release/` always holds exactly three files, all carrying the
+version number — `WirelessCable-<version>.exe` (desktop), `WirelessCable-<version>.apk` (phone) and
+`WirelessCable-<version>-portable.zip` (portable build, unzip and run). You can never pick up the
+wrong build by accident.
+
 The link is **bidirectional**: the PC can also browse folders the phone has shared, with four permission
 tiers set per folder.
 

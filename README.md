@@ -52,6 +52,10 @@
 
 **配对**：电脑「首页」出二维码 → 手机「扫码配对」。之后自动连。
 
+**发布包**：`WirelessCable-Release/` 里永远只有三个文件，名字都带版本号——
+`WirelessCable-<版本>.exe`（电脑端）、`WirelessCable-<版本>.apk`（手机端）、
+`WirelessCable-<版本>-portable.zip`（便携版，解压即用）。取哪一版不会拿错。
+
 更完整的操作说明见 [`docs/使用指南.md`](docs/使用指南.md)。
 
 ---
