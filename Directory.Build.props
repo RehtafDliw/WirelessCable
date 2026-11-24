@@ -2,11 +2,17 @@
 
   <PropertyGroup>
     <!--
-      版本号唯一来源。发布时只改这里（Android 侧对应 app/build.gradle.kts 的
-      versionName / versionCode，两边要一起改）。
-      build-desktop.sh 也从这里读版本，产物文件名跟着走。
+      **版本号唯一来源**：发版只改这一行，别处一律不要写死版本号。
+
+        · 桌面端：产物名 WirelessCable-<版本>.exe / -portable.zip
+        · Android：app/build.gradle.kts 读这里当 versionName，
+          **versionCode 由它派生**（major*10^7 + minor*10^5 + patch*10^3 + 999），
+          不需要（也不允许）手工递增
+        · 脚本：build-desktop.sh / build-android.sh / package-release.sh 都读这里
+
+      格式必须是 a.b.c（major≤213、minor≤99、patch≤99，受 Android versionCode 编码限制）。
     -->
-    <Version>2.11.0</Version>
+    <Version>2.11.2</Version>
 
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>

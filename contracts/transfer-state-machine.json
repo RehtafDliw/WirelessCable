@@ -1,0 +1,311 @@
+{
+  "version": 1,
+  "note": "传输状态机契约：某状态下执行某动作的**权威结果**。桌面端 (.NET) 与手机端 (Android JVM) 的测试都读这一份，改语义必须先改这里，否则两边测试同时红。 outcome: ok=成功 | error=失败（带错误码）| rejected=整体成功但这—条被跳过（批量语义） ui=true/false 表示界面上是否**显示**该动作的按钮（可以和 outcome 不同：界面可以比服务端更严格）。",
+  "states": {
+    "waiting": {
+      "active": true,
+      "terminal": false,
+      "resumable": true,
+      "note": "已建任务，还没开始传"
+    },
+    "preparing": {
+      "active": true,
+      "terminal": false,
+      "resumable": true
+    },
+    "transferring": {
+      "active": true,
+      "terminal": false,
+      "resumable": true
+    },
+    "verifying": {
+      "active": true,
+      "terminal": false,
+      "resumable": true
+    },
+    "paused": {
+      "active": false,
+      "terminal": false,
+      "resumable": true,
+      "note": "任一方暂停；半成品保留"
+    },
+    "interrupted": {
+      "active": false,
+      "terminal": false,
+      "resumable": true,
+      "note": "网络断了或进程重启，等恢复"
+    },
+    "completed": {
+      "active": false,
+      "terminal": true,
+      "resumable": false
+    },
+    "failed": {
+      "active": false,
+      "terminal": true,
+      "resumable": false
+    },
+    "cancelled": {
+      "active": false,
+      "terminal": true,
+      "resumable": false,
+      "note": "取消是双向的：两端都不再显示"
+    }
+  },
+  "actions": {
+    "pause": {
+      "waiting": {
+        "outcome": "ok",
+        "resultState": "paused",
+        "ui": true
+      },
+      "preparing": {
+        "outcome": "ok",
+        "resultState": "paused",
+        "ui": true
+      },
+      "transferring": {
+        "outcome": "ok",
+        "resultState": "paused",
+        "ui": true
+      },
+      "verifying": {
+        "outcome": "ok",
+        "resultState": "paused",
+        "ui": true
+      },
+      "paused": {
+        "outcome": "ok",
+        "resultState": "paused",
+        "reason": "already_paused",
+        "note": "幂等：重复暂停按成功处理，客户端可安全重试",
+        "ui": false
+      },
+      "interrupted": {
+        "outcome": "error",
+        "error": "transfer_state_invalid",
+        "ui": false
+      },
+      "completed": {
+        "outcome": "error",
+        "error": "transfer_state_invalid",
+        "ui": false
+      },
+      "failed": {
+        "outcome": "error",
+        "error": "transfer_state_invalid",
+        "ui": false
+      },
+      "cancelled": {
+        "outcome": "error",
+        "error": "transfer_state_invalid",
+        "ui": false
+      }
+    },
+    "resume": {
+      "waiting": {
+        "outcome": "ok",
+        "reason": "already_active",
+        "note": "幂等，状态不变",
+        "ui": false
+      },
+      "preparing": {
+        "outcome": "ok",
+        "reason": "already_active",
+        "ui": false
+      },
+      "transferring": {
+        "outcome": "ok",
+        "reason": "already_active",
+        "ui": false
+      },
+      "verifying": {
+        "outcome": "ok",
+        "reason": "already_active",
+        "ui": false
+      },
+      "paused": {
+        "outcome": "ok",
+        "resultState": "active",
+        "ui": true
+      },
+      "interrupted": {
+        "outcome": "ok",
+        "resultState": "active",
+        "ui": true
+      },
+      "completed": {
+        "outcome": "ok",
+        "reason": "already_completed",
+        "note": "已完成就是已完成，重复恢复不报错",
+        "ui": false
+      },
+      "failed": {
+        "outcome": "error",
+        "error": "transfer_state_invalid",
+        "ui": false
+      },
+      "cancelled": {
+        "outcome": "error",
+        "error": "transfer_cancelled",
+        "note": "专用码：两端据此问\"要不要删本机记录\"，不能用含糊的 state_invalid",
+        "ui": false
+      }
+    },
+    "cancel": {
+      "waiting": {
+        "outcome": "ok",
+        "resultState": "cancelled",
+        "ui": true
+      },
+      "preparing": {
+        "outcome": "ok",
+        "resultState": "cancelled",
+        "ui": true
+      },
+      "transferring": {
+        "outcome": "ok",
+        "resultState": "cancelled",
+        "ui": true
+      },
+      "verifying": {
+        "outcome": "ok",
+        "resultState": "cancelled",
+        "ui": true
+      },
+      "paused": {
+        "outcome": "ok",
+        "resultState": "cancelled",
+        "note": "暂停中必须也能取消，否则\"暂停了取消不掉\"",
+        "ui": true
+      },
+      "interrupted": {
+        "outcome": "ok",
+        "resultState": "cancelled",
+        "ui": true
+      },
+      "completed": {
+        "outcome": "error",
+        "error": "transfer_state_invalid",
+        "ui": false
+      },
+      "failed": {
+        "outcome": "error",
+        "error": "transfer_state_invalid",
+        "ui": false
+      },
+      "cancelled": {
+        "outcome": "error",
+        "error": "transfer_state_invalid",
+        "ui": false
+      }
+    },
+    "deleteRecord": {
+      "waiting": {
+        "outcome": "rejected",
+        "reason": "in_flight",
+        "resultState": "unchanged",
+        "note": "还在传输的只给「取消」；批量删记录时这一条被跳过，整体请求仍成功",
+        "ui": false
+      },
+      "preparing": {
+        "outcome": "rejected",
+        "reason": "in_flight",
+        "resultState": "unchanged",
+        "note": "还在传输的只给「取消」；批量删记录时这一条被跳过，整体请求仍成功",
+        "ui": false
+      },
+      "transferring": {
+        "outcome": "rejected",
+        "reason": "in_flight",
+        "resultState": "unchanged",
+        "note": "还在传输的只给「取消」；批量删记录时这一条被跳过，整体请求仍成功",
+        "ui": false
+      },
+      "verifying": {
+        "outcome": "rejected",
+        "reason": "in_flight",
+        "resultState": "unchanged",
+        "note": "还在传输的只给「取消」；批量删记录时这一条被跳过，整体请求仍成功",
+        "ui": false
+      },
+      "paused": {
+        "outcome": "ok",
+        "resultState": "cancelled",
+        "reason": "ends_transfer",
+        "ui": true,
+        "note": "暂停/中断中可以删记录：服务端会置 cancelled，等于\"这条到此为止\"，不需要先取消"
+      },
+      "interrupted": {
+        "outcome": "ok",
+        "resultState": "cancelled",
+        "reason": "ends_transfer",
+        "ui": true,
+        "note": "暂停/中断中可以删记录：服务端会置 cancelled，等于\"这条到此为止\"，不需要先取消"
+      },
+      "completed": {
+        "outcome": "ok",
+        "resultState": "unchanged",
+        "ui": true
+      },
+      "failed": {
+        "outcome": "ok",
+        "resultState": "unchanged",
+        "ui": true
+      },
+      "cancelled": {
+        "outcome": "ok",
+        "resultState": "unchanged",
+        "ui": true
+      }
+    },
+    "retry": {
+      "note": "失败后重新发起（不是 resume：服务端对 failed 的 resume 会拒绝）",
+      "waiting": {
+        "outcome": "client",
+        "note": "由客户端重新发起，不经服务端状态机",
+        "ui": false
+      },
+      "preparing": {
+        "outcome": "client",
+        "note": "由客户端重新发起，不经服务端状态机",
+        "ui": false
+      },
+      "transferring": {
+        "outcome": "client",
+        "note": "由客户端重新发起，不经服务端状态机",
+        "ui": false
+      },
+      "verifying": {
+        "outcome": "client",
+        "note": "由客户端重新发起，不经服务端状态机",
+        "ui": false
+      },
+      "paused": {
+        "outcome": "client",
+        "note": "由客户端重新发起，不经服务端状态机",
+        "ui": false
+      },
+      "interrupted": {
+        "outcome": "client",
+        "note": "由客户端重新发起，不经服务端状态机",
+        "ui": false
+      },
+      "completed": {
+        "outcome": "client",
+        "note": "由客户端重新发起，不经服务端状态机",
+        "ui": false
+      },
+      "failed": {
+        "outcome": "client",
+        "note": "由客户端重新发起，不经服务端状态机",
+        "ui": true
+      },
+      "cancelled": {
+        "outcome": "client",
+        "note": "由客户端重新发起，不经服务端状态机",
+        "ui": false
+      }
+    }
+  }
+}

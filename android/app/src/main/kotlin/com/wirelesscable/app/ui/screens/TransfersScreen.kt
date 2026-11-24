@@ -68,6 +68,7 @@ import com.wirelesscable.app.vm.TransferTab
 import com.wirelesscable.app.vm.TransferRow
 import com.wirelesscable.app.vm.TransferUiState
 import com.wirelesscable.app.core.i18n.Str
+import com.wirelesscable.app.core.transfer.TransferActions
 
 /** 行首选择槽宽度：圆环与勾选框共用同一个槽，进出多选时行内文字不会左右跳。 */
 private val SelectionSlotWidth = 44.dp
@@ -305,11 +306,17 @@ fun TransfersScreen(
                 // **传输中的条目只给「取消」，不给「删除记录」**（需求 4）：
                 // 选中的行全都在传的话，这个按钮直接不出现。删记录是"清理历史"，
                 // 而传输中的条目只有"取消传输"一个动作，两个放一起容易点错。
-                // 电脑端是同样的做法（传输中的整批菜单里不出现删除项）。
-                val allInFlight = state.selectedRows.isNotEmpty() &&
-                    state.selectedRows.all { row -> row.isActive }
+                //
+                // 判定走能力矩阵（assets/transfer-state-machine.json），
+                // 和电脑端、前端读同一张表——以前这里自己写 `row.isActive`，
+                // 电脑端写 `isInFlight`，两边语义其实不一样（paused 算不算"在传"）。
+                val canDelete = state.selectedRows.isNotEmpty() &&
+                    TransferActions.allShow(
+                        TransferActions.DELETE_RECORD,
+                        state.selectedRows.flatMap { row -> row.states },
+                    )
 
-                if (!allInFlight) {
+                if (canDelete) {
                     WcLinkButton(
                         text = Str.t("删除"),
                         onClick = {
@@ -509,7 +516,9 @@ private fun TransferItemRow(
     val completed = item.state == TransferStates.COMPLETED
     val shownProgress = if (completed) 1f else item.progress
     val failed = item.state == TransferStates.FAILED || item.state == TransferStates.CANCELLED
-    val paused = item.state == TransferStates.PAUSED
+    // 「继续」的显示条件走能力矩阵：paused **和 interrupted** 都给
+    // （服务端对两者都接受 resume）。以前只判 PAUSED，中断的任务只能干等自动重连。
+    val paused = TransferActions.shows(TransferActions.RESUME, item.state)
     val tint = when {
         completed -> WcColors.Success
         failed -> WcColors.Error
@@ -586,20 +595,26 @@ private fun TransferItemRow(
 
         Spacer(Modifier.width(WcSpace.s2))
 
+        // 行内动作全部由能力矩阵决定（assets/transfer-state-machine.json）：
+        // 服务端不接受的动作，这里不会出现按钮——不让用户点了才发现不行。
         when {
-            item.isActive -> {
+            TransferActions.shows(TransferActions.PAUSE, item.state) -> {
                 WcRowAction(PauseIcon, onPause, contentDescription = Str.t("暂停"))
-                Spacer(Modifier.width(2.dp))
-                WcRowAction(CloseIcon, onCancel, contentDescription = Str.t("取消"))
+                if (TransferActions.shows(TransferActions.CANCEL, item.state)) {
+                    Spacer(Modifier.width(2.dp))
+                    WcRowAction(CloseIcon, onCancel, contentDescription = Str.t("取消"))
+                }
             }
 
             paused -> {
                 WcRowAction(PlayIcon, onResume, contentDescription = Str.t("继续"))
-                Spacer(Modifier.width(2.dp))
-                WcRowAction(CloseIcon, onCancel, contentDescription = Str.t("取消"))
+                if (TransferActions.shows(TransferActions.CANCEL, item.state)) {
+                    Spacer(Modifier.width(2.dp))
+                    WcRowAction(CloseIcon, onCancel, contentDescription = Str.t("取消"))
+                }
             }
 
-            item.needsSave && item.state == TransferStates.FAILED ->
+            TransferActions.shows(TransferActions.RETRY, item.state) && item.needsSave ->
                 WcRowAction(RefreshIcon, onRetry, contentDescription = Str.t("重试"))
         }
     }

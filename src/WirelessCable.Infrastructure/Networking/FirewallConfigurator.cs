@@ -45,6 +45,16 @@ public static class FirewallConfigurator
         new FirewallRule("WirelessCable mDNS 5353", "UDP", 5353),
     ];
 
+    /// <summary>
+    /// **只查不改**：返回缺失的规则名。
+    ///
+    /// 诊断页专用。诊断不该顺手改系统状态——用户点开只是想看看哪儿不对，
+    /// 结果后台偷偷加了防火墙规则，出了别的问题更难查。要修就走
+    /// <see cref="Ensure"/>（界面上有明确的按钮）。
+    /// </summary>
+    public static IReadOnlyList<string> MissingRules(IReadOnlyList<FirewallRule> rules)
+        => rules.Where(rule => !RuleExists(rule.Name)).Select(rule => rule.Name).ToArray();
+
     /// <summary>检查并尝试配置。不做提权，提权由调用方决定。</summary>
     public static FirewallStatus Ensure(IReadOnlyList<FirewallRule> rules, out string? detail)
     {

@@ -11,6 +11,7 @@ import {
   TransfersPage,
   SharedPage,
   SettingsPage,
+  DiagnosticsPage,
   PairingQrDialog,
 } from './pages';
 import { AndroidHome, StatesBoard } from './mobile';
@@ -23,6 +24,7 @@ const NAV = [
   { key: 'devices', zh: '设备管理', icon: 'users' as const },
   { key: 'transfers', zh: '传输中心', icon: 'download' as const },
   { key: 'shared', zh: '共享目录', icon: 'folder' as const },
+  { key: 'diagnostics', zh: '连接诊断', icon: 'shield' as const },
   { key: 'settings', zh: '设置', icon: 'settings' as const },
 ];
 
@@ -32,6 +34,7 @@ const TITLES: Record<string, { title: string; sub: string }> = {
   devices: { title: '设备管理', sub: '已配对的设备与权限' },
   transfers: { title: '传输中心', sub: '进行中与历史任务' },
   shared: { title: '共享目录', sub: '授权给设备的本机目录' },
+  diagnostics: { title: '连接诊断', sub: '手机连不上时先看这里' },
   settings: { title: '设置', sub: '应用偏好与连接' },
 };
 
@@ -259,6 +262,7 @@ export function App() {
           {page === 'devices' && <DevicesPage />}
           {page === 'transfers' && <TransfersPage />}
           {page === 'shared' && <SharedPage openEditor={params.get('dialog') === 'root'} />}
+          {page === 'diagnostics' && <DiagnosticsPage />}
           {page === 'settings' && <SettingsPage initialTab={params.get('tab') ?? t('常规')} />}
         </div>
       </div>

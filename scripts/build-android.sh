@@ -27,8 +27,13 @@ if [ ! -f "$GRADLE" ]; then
     exit 1
 fi
 
-VERSION="$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' "$ROOT/android/app/build.gradle.kts" | head -1)"
-VERSION="${VERSION:-0.1.0}"
+# 版本号唯一来源：根目录 Directory.Build.props（与桌面端、gradle 同一份）。
+# 以前是从 build.gradle.kts 里抠 versionName —— 那是第二份手工维护的副本。
+VERSION="$(sed -n 's/.*<Version>\(.*\)<\/Version>.*/\1/p' "$ROOT/Directory.Build.props" | head -1)"
+if [ -z "$VERSION" ]; then
+    echo "在 Directory.Build.props 里找不到 <Version>，无法确定产物名。" >&2
+    exit 1
+fi
 
 if [ "$MODE" = "release" ]; then
     echo "==> 构建 Android $VERSION（签名 release）"

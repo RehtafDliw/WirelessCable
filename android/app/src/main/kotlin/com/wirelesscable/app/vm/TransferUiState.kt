@@ -261,9 +261,18 @@ sealed interface TransferRow {
 
     val taskIds: List<String>
 
+    /**
+     * 这一行涉及的任务状态。
+     *
+     * 能力矩阵（暂停/继续/取消/删除该不该给按钮）按状态算；
+     * 整批行只要有一条不满足，那个动作就不该出现——所以这里要**全部**状态。
+     */
+    val states: List<String>
+
     data class Single(val item: TransferItem) : TransferRow {
         override val key: String get() = item.taskId
         override val taskIds: List<String> get() = listOf(item.taskId)
+        override val states: List<String> get() = listOf(item.state)
         override val isActive: Boolean get() = item.isActive
         override fun isLive(now: Long): Boolean =
             // 取消也算"结束了"：它不会再有进展，留在「传输中」只会让那一页永远清不空。
@@ -294,6 +303,7 @@ sealed interface TransferRow {
         // 同一目录可能有多批：key 必须带上首条 taskId，否则 LazyColumn 的 key 冲突
         override val key: String get() = "batch:$batchId#${entries.first().taskId}"
         override val taskIds: List<String> get() = entries.map { it.taskId }
+        override val states: List<String> get() = entries.map { it.state }
 
         /** 代表行：名字和设备名取它（同批里这几项都一样）。 */
         val lead: TransferItem get() = entries.first()

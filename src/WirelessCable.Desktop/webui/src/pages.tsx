@@ -39,6 +39,7 @@ import {
   shortFingerprint,
   stateLabel,
 } from './format';
+import { shows } from './actions';
 
 /* ===================== 通用 ===================== */
 
@@ -1639,13 +1640,17 @@ export function TransfersPage() {
 
     // 传输中的**文件夹**不显示删除记录（需求 4）：它只有「取消传输」一个动作。
     // 单文件在传时保留入口但禁用——用户能看见"有这条但删不了"，比凭空消失更好懂。
-    const batchInFlight = Boolean(group.batchId) && group.items.some((row) => isInFlight(row.state));
+    //
+    // 判定走能力矩阵（contracts/transfer-state-machine.json），不再自己写一遍
+    // `isInFlight`：手机端读同一张表，改语义不会出现"这端给了、那端没给"。
+    const cannotDelete = group.items.some((row) => !shows('deleteRecord', row.state));
+    const batchInFlight = Boolean(group.batchId) && cannotDelete;
 
     if (!batchInFlight) {
       items.push({
         label: group.batchId ? t(`删除整批（${group.items.length} 个文件）`) : t('删除记录'),
         danger: true,
-        disabled: group.items.some((row) => isInFlight(row.state)),
+        disabled: cannotDelete,
         onSelect: () =>
           askDelete(
             group.items.map((row) => row.taskId),
@@ -4414,6 +4419,193 @@ export function SettingsPage({ initialTab = t('常规') }: { initialTab?: string
 
           <Notice text={action.notice} />
         </div>
+      </div>
+    </div>
+  );
+}
+
+/* ===================== 连接诊断 ===================== */
+
+/**
+ * 一条检查结果。服务端算好结论，界面只负责显示——
+ * 判定逻辑放在服务端是为了让它能被 .NET 单测覆盖（真机上没法可靠制造
+ * "防火墙缺规则""mDNS 挂了"这些场景）。
+ */
+interface DiagCheck {
+  id: string;
+  outcome: 'ok' | 'warn' | 'fail';
+  title: string;
+  detail: string;
+  fix?: string | null;
+}
+
+const DIAG_TONE: Record<DiagCheck['outcome'], { color: string; background: string; label: string }> = {
+  ok: { color: 'var(--ok-success-text)', background: 'var(--ok-success-soft)', label: '正常' },
+  warn: { color: 'var(--ok-danger-text)', background: 'var(--ok-accent-soft)', label: '注意' },
+  fail: { color: 'var(--ok-danger-text)', background: 'var(--ok-danger-soft)', label: '有问题' },
+};
+
+/**
+ * 连接诊断。
+ *
+ * 顺序就是排查顺序：本机网络 → 服务端口 → 局域网广播 → 防火墙 → 每台设备。
+ * 手机端有一屏同样的诊断（`DiagnosticsEvaluator`），两边的结论要能对上——
+ * 否则用户在手机上看是"网络隔离"、在电脑上看是"一切正常"，谁也不信。
+ *
+ * 检查是**只读**的：修防火墙要点按钮才动（`/diagnostics/fix/apply-firewall`），
+ * 诊断本身不偷偷改系统。
+ */
+export function DiagnosticsPage() {
+  const checks = useApi<{ checks: DiagCheck[] }>('/diagnostics/checks', 0);
+  const [fixing, setFixing] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+
+  const items = checks.data?.checks ?? [];
+  const problems = items.filter((check) => check.outcome !== 'ok');
+
+  const runFix = async (action: string) => {
+    setFixing(action);
+    setNote(null);
+
+    try {
+      const result = await api.post<{ ok: boolean; detail: string }>(`/diagnostics/fix/${action}`);
+      setNote(result.detail);
+      checks.reload();
+    } catch (error) {
+      setNote(error instanceof Error ? error.message : String(error));
+    } finally {
+      setFixing(null);
+    }
+  };
+
+  return (
+    <div className="wc-page">
+      <div className="wc-section__head" style={{ marginBottom: 12 }}>
+        <div>
+          <div className="wc-section__title">{t('连接诊断')}</div>
+          <div className="wc-section__hint">
+            {t('手机连不上时先看这里。检查是只读的，修防火墙要点按钮才会动。')}
+          </div>
+        </div>
+        <Button onClick={() => checks.reload()}>{t('重新检查')}</Button>
+      </div>
+
+      <div
+        style={{
+          marginBottom: 12,
+          padding: '10px 14px',
+          borderRadius: 10,
+          background: problems.length === 0 ? 'var(--ok-success-soft)' : 'var(--ok-accent-soft)',
+          color: problems.length === 0 ? 'var(--ok-success-text)' : 'var(--ok-danger-text)',
+          font: '500 13px/1.5 var(--ok-font)',
+        }}
+      >
+        {checks.error
+          ? t(`读不到检查结果：${checks.error}`)
+          : items.length === 0
+            ? t('正在检查…')
+            : problems.length === 0
+              ? t('全部正常。手机还是连不上的话，看下面两条：')
+              : t(`有 ${problems.length} 项需要注意，按顺序往下看。`)}
+      </div>
+
+      {problems.length === 0 && items.length > 0 && (
+        <div
+          style={{
+            marginBottom: 12,
+            padding: '10px 14px',
+            borderRadius: 10,
+            background: 'var(--ok-card)',
+            border: '1px solid var(--ok-line)',
+            font: '400 12.5px/1.7 var(--ok-font)',
+            color: 'var(--ok-text-2)',
+          }}
+        >
+          {t('1. 手机和电脑要连同一个 Wi-Fi（不是访客网络）。')}
+          <br />
+          {t('2. 同一个 Wi-Fi 却连不上，多半是路由器开了「AP 隔离」——改成用热点直连。')}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {items.map((check) => {
+          const tone = DIAG_TONE[check.outcome];
+          return (
+            <div
+              key={check.id}
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: 12,
+                padding: '12px 14px',
+                borderRadius: 10,
+                background: 'var(--ok-card)',
+                border: '1px solid var(--ok-line)',
+              }}
+            >
+              <span
+                style={{
+                  flex: '0 0 auto',
+                  marginTop: 1,
+                  padding: '2px 8px',
+                  borderRadius: 999,
+                  background: tone.background,
+                  color: tone.color,
+                  font: '600 11px/1.6 var(--ok-font)',
+                }}
+              >
+                {t(tone.label)}
+              </span>
+
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ font: '600 13px/1.5 var(--ok-font)', color: 'var(--ok-text)' }}>
+                  {check.title}
+                </div>
+                {check.detail && (
+                  <div
+                    style={{
+                      marginTop: 2,
+                      font: '400 12px/1.6 var(--ok-font)',
+                      color: 'var(--ok-text-2)',
+                    }}
+                  >
+                    {check.detail}
+                  </div>
+                )}
+              </div>
+
+              {check.fix && (
+                <Button
+                  disabled={fixing === check.fix}
+                  onClick={() => void runFix(check.fix as string)}
+                >
+                  {fixing === check.fix ? t('处理中…') : t('修复')}
+                </Button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {note && (
+        <div
+          style={{
+            marginTop: 10,
+            font: '400 12px/1.6 var(--ok-font)',
+            color: 'var(--ok-text-2)',
+          }}
+        >
+          {note}
+        </div>
+      )}
+
+      <div style={{ marginTop: 18, display: 'flex', gap: 8, alignItems: 'center' }}>
+        <Button onClick={() => void download('/diagnostics/bundle', 'wirelesscable-diag.zip')}>
+          {t('导出诊断包')}
+        </Button>
+        <span style={{ font: '400 12px/1.6 var(--ok-font)', color: 'var(--ok-text-2)' }}>
+          {t('导出的是一个 zip：文件名默认脱敏，排查落点时再勾选包含文件名。')}
+        </span>
       </div>
     </div>
   );

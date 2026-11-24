@@ -27,6 +27,7 @@ import com.wirelesscable.app.core.direct.DirectStatus
 import com.wirelesscable.app.core.direct.DirectSessionManager
 import com.wirelesscable.app.core.direct.HotspotController
 import com.wirelesscable.app.core.direct.HotspotNetworkPin
+import com.wirelesscable.app.core.network.LocalSubnet
 import com.wirelesscable.app.core.direct.HotspotPermissions
 import com.wirelesscable.app.core.direct.HotspotSuggester
 import com.wirelesscable.app.core.files.FileOpener
@@ -715,6 +716,17 @@ class DirectViewModel(application: Application) : AndroidViewModel(application) 
             }
 
             if (connected == null || peer == null) {
+                // **把失败写进 debug 日志**。
+                // 以前只写了 android.util.Log.w（logcat），用户导出的 debug*.log 里
+                // 失败是空白的——"同一 Wi-Fi 连不上"到底是被路由器隔离（ConnectException）、
+                // 还是地址不可达（SocketTimeout / NoRouteToHost），从日志上分辨不出来。
+                com.wirelesscable.app.core.direct.DirectLog.w(
+                    "扫码连接失败 候选=${candidates.joinToString(",")} " +
+                        "失败明细=" + failures.joinToString(" | ") { (host, error) ->
+                            "$host:${error.javaClass.simpleName}(${error.message ?: "-"})"
+                        },
+                )
+
                 // 挑"最有信息量"的那条：连上了但口令不对 > 握手失败 > 其它
                 val chosen = failures.firstOrNull {
                     it.second is DirectHttpException && (it.second as DirectHttpException).statusCode == 401
@@ -770,7 +782,11 @@ class DirectViewModel(application: Application) : AndroidViewModel(application) 
             val files = connected.shared().getOrDefault(emptyList())
 
             com.wirelesscable.app.core.direct.DirectLog.session(
-                "扫码连上 ${peer.deviceName} 路径=${if (viaHotspot) "热点" else "普通 Wi-Fi"} " +
+                // 措辞要准：viaHotspot 表示"用的是码里带的热点配置"，
+                // 不是"对端网络类型"。对方开着热点但码里没带配置时，扫码方照样
+                // 直连对方热点地址成功——那不算 viaHotspot，写成"普通 Wi-Fi"会误导排查。
+                "扫码连上 ${peer.deviceName} " +
+                    "路径=${if (viaHotspot) "码内热点配置" else "码内普通地址"} " +
                     "实际地址=${connectedHost ?: "?"} 二维码host=${payload.host} port=${payload.port}",
             )
 
@@ -1263,8 +1279,13 @@ class DirectViewModel(application: Application) : AndroidViewModel(application) 
             return "连不上对方"
         }
 
-        // 界面上只给一句话，完整栈留给 logcat（adb logcat -s WcDirect）
+        // 界面上只给一句话，完整栈留给 logcat（adb logcat -s WcDirect）；
+        // 只要了 debug 日志的用户也能看到异常类型与消息（否则现场日志一片空白）。
         android.util.Log.w("WcDirect", "直连失败 host=$host", error)
+        com.wirelesscable.app.core.direct.DirectLog.w(
+            "直连失败 host=$host 异常=${error.javaClass.name} 消息=${error.message ?: "-"}" +
+                (error.cause?.let { " 原因=${it.javaClass.simpleName}(${it.message ?: "-"})" } ?: ""),
+        )
 
         val detail = error.message?.takeIf { it.isNotBlank() }
             ?: error.cause?.message?.takeIf { it.isNotBlank() }
@@ -1283,12 +1304,29 @@ class DirectViewModel(application: Application) : AndroidViewModel(application) 
             error is java.net.ConnectException ->
                 "连不上 $host：对方已停止出码，或这个 Wi-Fi 禁止设备互访（可换热点再试）"
 
+            // 「超时」= SYN 发出去**没有任何回应**（网络层丢包），
+            // 这和「连接被拒绝」是两回事：后者说明包到了、只是端口没人接。
+            //
+            // 而且**必须先判断同网段**：两台手机都在 192.168.158.x 时还在说
+            // "可能不在同一网络"，等于把用户往错误方向带——他去看手机网络设置，
+            // 可两台明明连的是同一个 Wi-Fi。真正的原因几乎都是路由器那一侧
+            // （AP 隔离 / 客户端隔离 / 访客网络），或者连了不同的 AP。
             error is java.net.SocketTimeoutException ->
-                "连不上 $host：连接超时，两台手机可能不在同一网络"
+                if (LocalSubnet.isSameSubnet(host)) {
+                    "连不上 $host：连接超时。两台手机在同一网段，但对端收不到请求——" +
+                        "多半是路由器开了「AP 隔离 / 客户端隔离」，或其中一台连的是访客网络。" +
+                        "可在对方直连页打开「用热点直连」再出码"
+                } else {
+                    "连不上 $host：连接超时，两台手机可能不在同一网络（一个连 Wi-Fi、一个连热点或流量？）"
+                }
 
             error is java.net.NoRouteToHostException ||
                 error is java.net.UnknownHostException ->
-                "连不上 $host：地址不可达，两台手机不在同一网络"
+                if (LocalSubnet.isSameSubnet(host)) {
+                    "连不上 $host：地址不可达（同一网段内被阻断，常见于路由器隔离）"
+                } else {
+                    "连不上 $host：地址不可达，两台手机不在同一网络"
+                }
 
             // TCP/TLS 都通了，但对端在回响应前把连接关掉：最常见是二维码过期
             // （对方已经结束会话），其次是对方退出了出码页。

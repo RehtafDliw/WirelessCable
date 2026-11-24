@@ -16,6 +16,18 @@
   </ItemGroup>
 
   <!--
+    传输状态机契约（仓库根 contracts/）。
+
+    嵌进程序集而不是运行时读文件：交付是单文件 exe，运行时没有仓库目录。
+    桌面端 (C#)、手机端 (assets)、前端 (TS import) 三处读的是**同一份文件**，
+    改语义只改它，三端测试同时变红（见 TransferStateMachineContractTests）。
+  -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\contracts\transfer-state-machine.json"
+                      LogicalName="contracts/transfer-state-machine.json" />
+  </ItemGroup>
+
+  <!--
     新版界面产物（webui/dist）。
 
     打成嵌入资源而不是 wwwroot 目录：交付仍然是单文件 exe。

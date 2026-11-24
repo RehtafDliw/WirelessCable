@@ -52,9 +52,12 @@ class DiscoveryTxtTest {
     @Test
     fun subnetOrderingPutsSameSubnetFirst() {
         // 只验证纯函数部分：地址转整数（32 位有符号，故用 toInt() 对齐）
-        assertEquals(0xAC120F3F.toInt(), LocalSubnet.toInt("192.0.2.63"))
+        // 192.0.2.63 = 0xC0.00.02.3F。
+        // 以前这里是另一个十六进制值（对应开发机当时的内网地址），换成文档地址时
+        // 只改了字符串、漏了这个字面量，测试一直红着没人发现。
+        assertEquals(0xC000023F.toInt(), LocalSubnet.toInt("192.0.2.63"))
         assertNull(LocalSubnet.toInt("172.18.15"))
-        assertNull(LocalSubnet.toInt("172.18.15.999"))
+        assertNull(LocalSubnet.toInt("192.0.2.999"))
 
         // preferLocal 在本机只能验证"不丢地址"
         val input = listOf("198.51.100.108", "192.0.2.63")

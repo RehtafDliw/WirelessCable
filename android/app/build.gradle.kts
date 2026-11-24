@@ -23,6 +23,53 @@ val keystoreProps = Properties().apply {
     }
 }
 
+/*
+ * 版本号**唯一来源**是项目根的 `Directory.Build.props`（桌面端也读它）。
+ *
+ * 以前这里手写 `versionCode = 353` + `versionName = "2.11.1"`，每次发版都要
+ * 记得同时改三处（props 的 Version、这里的 versionName、这里的 versionCode），
+ * 漏一处就出现"桌面 2.11.2、手机 2.11.1"或者 versionCode 没涨导致装不上。
+ * 现在只改 props 一处，versionCode 由版本**派生**，永远不会忘、不会撞。
+ */
+val appVersion: String = run {
+    val props = rootProject.file("../Directory.Build.props")
+    require(props.exists()) { "缺少版本号来源：${props.absolutePath}" }
+    Regex("<Version>([^<]+)</Version>")
+        .find(props.readText())
+        ?.groupValues?.get(1)
+        ?: error("在 Directory.Build.props 里找不到 <Version>")
+}
+
+/**
+ * Android 要求新包的 `versionCode` **严格大于**已装的那个，否则系统拒绝升级
+ * （报"应用未安装"）。所以它必须能从一个可读的版本号稳定算出来。
+ *
+ * 规则：`major * 10_000_000 + minor * 100_000 + patch * 1_000 + 999`
+ *
+ *   2.11.1 → 21101999
+ *   2.11.2 → 21102999
+ *   2.12.0 → 21200999
+ *   3.0.0  → 30000999
+ *
+ * 末尾的 999 给预发布版本留出空位（比如 `2.11.1-beta.1` 可以占 21101001），
+ * 正式版永远排在它的预发布之后。上限来自 Android 的 2_100_000_000。
+ */
+val appVersionCode: Int = run {
+    val plain = appVersion.substringBefore('-').substringBefore('+')
+    val parts = plain.split('.')
+    require(parts.size == 3) { "版本号必须是 a.b.c 形式，当前是 $appVersion" }
+
+    val numbers = parts.map { part ->
+        part.toIntOrNull() ?: error("版本号里有一段不是数字：'$part'（完整值 $appVersion）")
+    }
+    val (major, minor, patch) = numbers
+    require(major <= 213 && minor <= 99 && patch <= 99) {
+        "版本号 $appVersion 超出 Android versionCode 的编码范围（major≤213, minor≤99, patch≤99）"
+    }
+
+    major * 10_000_000 + minor * 100_000 + patch * 1_000 + 999
+}
+
 android {
     namespace = "com.wirelesscable.app"
     compileSdk = 35
@@ -35,9 +82,17 @@ android {
         // 这行以前写的是"需求下限：Android 13"，和取值 30 不一致，排查权限时被误导过（1.5.58）。
         minSdk = 30
         targetSdk = 35
-        versionCode = 352
-        versionName = "2.11.0"
+        versionCode = appVersionCode
+        versionName = appVersion
     }
+
+    /**
+     * 契约表（仓库根 `contracts/`）打进 assets。
+     *
+     * 桌面端把它嵌进程序集、前端在构建时 import 它，手机端读 assets——
+     * **三处同一份文件**。改状态机语义只改那一份，三端测试同时红。
+     */
+    sourceSets["main"].assets.srcDir(rootProject.file("../contracts"))
 
     signingConfigs {
         create("release") {

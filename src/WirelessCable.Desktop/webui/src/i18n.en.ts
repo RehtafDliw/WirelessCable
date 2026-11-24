@@ -150,6 +150,26 @@ export const EN: Record<string, string> = {
   '已重新开始': 'Restarted',
   '重新开始': 'Restart',
   '整批重新开始': 'Restart the whole batch',
+  '连接诊断': 'Connection doctor',
+  '手机连不上时先看这里': 'Start here when the phone cannot connect',
+  '手机连不上时先看这里。检查是只读的，修防火墙要点按钮才会动。':
+    'Start here when the phone cannot connect. The checks only read; the firewall changes only when you press the button.',
+  '重新检查': 'Check again',
+  '正常': 'OK',
+  '注意': 'Check',
+  '有问题': 'Problem',
+  '正在检查…': 'Checking\u2026',
+  '全部正常。手机还是连不上的话，看下面两条：':
+    'Everything looks fine. If the phone still cannot connect, read the two notes below:',
+  '1. 手机和电脑要连同一个 Wi-Fi（不是访客网络）。':
+    '1. The phone and the PC must be on the same Wi-Fi (not a guest network).',
+  '2. 同一个 Wi-Fi 却连不上，多半是路由器开了「AP 隔离」——改成用热点直连。':
+    '2. Same Wi-Fi but no connection usually means the router has AP isolation on — switch to the hotspot instead.',
+  '修复': 'Fix',
+  '处理中…': 'Working\u2026',
+  '导出诊断包': 'Export diagnostics',
+  '导出的是一个 zip：文件名默认脱敏，排查落点时再勾选包含文件名。':
+    'The export is a zip with file names masked by default; tick the option when you need the real paths.',
   '已继续传输': 'Resumed',
   '下载手机版': 'Get the phone app',
   '在手机上打开这个链接，下载并安装手机版':
@@ -422,6 +442,8 @@ export const EN_RULES: Array<[RegExp, (m: RegExpMatchArray) => string]> = [
   [/^已完成 (\d+)$/, (m) => `Completed ${m[1]}`],
   [/^正在交给手机 (\d+)\/(\d+)$/, (m) => `Sending to phone ${m[1]}/${m[2]}`],
   [/^传输中 (\d+)$/, (m) => `Transferring ${m[1]}`],
+  [/^有 (\d+) 项需要注意，按顺序往下看。$/, (m) => `${m[1]} item(s) need attention — read them in order.`],
+  [/^读不到检查结果：(.*)$/, (m) => `Could not read the checks: ${m[1]}`],
   [/^ 等 (\d+) 项$/, (m) => ` and ${m[1]} more`],
   [/^等 (\d+) 项$/, (m) => `${m[1]} pending`],
   [/^等 (\d+) 个$/, (m) => `${m[1]} queued`],

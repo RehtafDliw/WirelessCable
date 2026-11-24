@@ -14,6 +14,7 @@ using WirelessCable.Server.Transfer;
 using WirelessCable.Storage;
 using WirelessCable.Storage.Entities;
 using WirelessCable.Storage.Repositories;
+using WirelessCable.Infrastructure.Networking;
 
 namespace WirelessCable.Server.WebUi;
 
@@ -124,6 +125,141 @@ public static class LocalUiEndpoints
             var diagnostics = context.RequestServices.GetRequiredService<DiagnosticsService>();
             var snapshot = await diagnostics.SnapshotAsync(context.RequestAborted).ConfigureAwait(false);
             return Results.Json(snapshot);
+        });
+
+        // 连接诊断：把"为什么手机连不上"拆成几条看得懂的检查。
+        //
+        // 只读——不改任何系统状态。要修的动作另走 /diagnostics/fix/{action}，
+        // 用户在界面上明确点了才动（诊断不该顺手改防火墙）。
+        //
+        // 检查顺序是刻意的：先"本机在不在局域网"，再"服务在不在听"，
+        // 再"能不能被发现"（mDNS），再"包能不能进来"（防火墙），
+        // 最后才是每台设备。顺序反了会把"防火墙拦了"说成"手机没连"。
+        api.MapGet("/diagnostics/checks", async (HttpContext context) =>
+        {
+            var runtime = context.RequestServices.GetRequiredService<ServerRuntime>();
+            var server = context.RequestServices.GetRequiredService<WirelessCableServer>();
+            var devices = context.RequestServices.GetRequiredService<DeviceRepository>();
+            var cancellationToken = context.RequestAborted;
+
+            var snapshot = runtime.Snapshot();
+            var now = DateTimeOffset.UtcNow;
+            var lan = snapshot.Addresses
+                .Where(static address => !address.StartsWith("169.254.", StringComparison.Ordinal))
+                .ToArray();
+
+            var checks = new List<object>();
+
+            // 1) 本机有没有局域网地址。169.254 是 APIPA：网线插着但没拿到 DHCP，
+            //    看着"有地址"，实际谁也连不上。
+            checks.Add(new
+            {
+                id = "network",
+                outcome = lan.Length > 0 ? "ok" : "fail",
+                title = lan.Length > 0
+                    ? $"本机在局域网上（{string.Join("、", lan)}）"
+                    : "本机没有局域网地址",
+                detail = lan.Length > 0
+                    ? "手机要连的就是这些地址中的一个。"
+                    : "电脑没连上任何局域网（Wi-Fi 断了，或网线没插好）。",
+                fix = (string?)null,
+            });
+
+            // 2) 服务端口在不在听
+            var running = snapshot.State.ToString() is "Running";
+            checks.Add(new
+            {
+                id = "port",
+                outcome = running ? "ok" : "fail",
+                title = $"服务端口 {snapshot.Port}",
+                detail = running ? "正在监听。" : "服务没有在运行，手机一定连不上。",
+                fix = (string?)null,
+            });
+
+            // 3) mDNS：手机换网络后靠它自动找回电脑
+            checks.Add(new
+            {
+                id = "mdns",
+                outcome = server.MdnsRunning ? "ok" : "warn",
+                title = server.MdnsRunning ? "局域网广播正常" : "局域网广播没在跑",
+                detail = server.MdnsRunning
+                    ? "手机换网络后能自动找回这台电脑。"
+                    : (server.MdnsError ?? "手机只能靠二维码里的地址连；换了网络要重新扫码。"),
+                fix = (string?)null,
+            });
+
+            // 4) 防火墙：只查不改
+            var missing = FirewallConfigurator.MissingRules(
+                FirewallConfigurator.BuildRules(snapshot.Port ?? ProtocolConstants.DefaultHttpsPort));
+            checks.Add(new
+            {
+                id = "firewall",
+                outcome = missing.Count == 0 ? "ok" : "warn",
+                title = missing.Count == 0 ? "防火墙已放行" : $"防火墙缺少 {missing.Count} 条规则",
+                detail = missing.Count == 0
+                    ? "入站规则齐全。"
+                    : $"缺：{string.Join("、", missing)}。手机的包可能进不来。",
+                fix = missing.Count == 0 ? null : "apply-firewall",
+            });
+
+            // 5) 每台已配对的设备
+            var paired = await devices.ListAsync(cancellationToken).ConfigureAwait(false);
+            foreach (var device in paired.Where(static d => d.IsPaired && !d.IsRevoked))
+            {
+                var online = IsOnline(device.LastSeenUtc, now);
+                var seen = device.LastSeenUtc is null
+                    ? "还从来没有连过"
+                    : $"{(long)Math.Max(0, (now - device.LastSeenUtc.Value).TotalSeconds)} 秒前收到心跳";
+
+                checks.Add(new
+                {
+                    id = $"device:{device.DeviceId}",
+                    outcome = online ? "ok" : "warn",
+                    title = $"{device.DisplayName}：{(online ? "在线" : "离线")}",
+                    detail = online
+                        ? "正在连接。"
+                        : $"{seen}（超过 30 秒就算离线）。手机可能息屏、退了后台，或不在同一网络。",
+                    fix = (string?)null,
+                });
+            }
+
+            return Results.Json(new
+            {
+                generatedAtUnixMs = now.ToUnixTimeMilliseconds(),
+                checks,
+            });
+        });
+
+        // 诊断的修复动作。只有界面上明确点了才会走到这里。
+        api.MapPost("/diagnostics/fix/{action}", (string action, HttpContext context) =>
+        {
+            var runtime = context.RequestServices.GetRequiredService<ServerRuntime>();
+
+            switch (action)
+            {
+                case "apply-firewall":
+                {
+                    var snapshot = runtime.Snapshot();
+                    var status = FirewallConfigurator.Ensure(
+                        FirewallConfigurator.BuildRules(snapshot.Port ?? ProtocolConstants.DefaultHttpsPort), out var detail);
+
+                    return Results.Json(new
+                    {
+                        ok = status is FirewallStatus.AlreadyConfigured or FirewallStatus.Applied,
+                        status = status.ToString(),
+                        detail = detail ?? status switch
+                        {
+                            FirewallStatus.AlreadyConfigured => "规则本来就在。",
+                            FirewallStatus.Applied => "已添加。",
+                            FirewallStatus.ElevationRequired => "需要管理员权限：重启程序时同意一次 UAC。",
+                            _ => "添加失败。",
+                        },
+                    });
+                }
+
+                default:
+                    return Results.NotFound(new { code = "unknown_fix", message = $"不认识的修复动作：{action}" });
+            }
         });
 
         // 诊断包：浏览器下载一个 zip。

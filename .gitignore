@@ -99,3 +99,7 @@ _ReSharper*/
 Thumbs.db
 .DS_Store
 desktop.ini
+
+# 参考用的第三方项目（NectarLink，GPL-3.0/MPL-2.0）：只读来学习，**不入库**。
+# 许可证与本仓库不同，混进来会造成授权冲突；留着也只会让 diff 噪音巨大。
+/nectarlink-main/

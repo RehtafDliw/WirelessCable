@@ -6,6 +6,7 @@ import com.wirelesscable.app.core.direct.HotspotSuggester
 import com.wirelesscable.app.core.discovery.NsdDiscoveryService
 import com.wirelesscable.app.core.network.HotspotConnector
 import com.wirelesscable.app.core.sync.SessionSyncEngine
+import com.wirelesscable.app.core.transfer.TransferActions
 import com.wirelesscable.app.core.transfer.TransferRuntime
 import com.wirelesscable.app.data.db.AppDatabase
 import com.wirelesscable.app.data.repository.ConnectionRepository
@@ -33,6 +34,10 @@ class WirelessCableApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+
+        // 能力矩阵（暂停/继续/取消/删除的按钮该不该出现）必须在任何界面之前就绪：
+        // 它读的是 assets 里的契约表，和桌面端、前端同一份。
+        TransferActions.init(this)
 
         // 直连日志要在任何一次直连尝试之前定下落点：
         // 公开目录写不进去（分区存储/没给存储权限）时自动落到应用私有目录，
