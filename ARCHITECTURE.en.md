@@ -1,6 +1,6 @@
 # ARCHITECTURE.md — Architecture and key decisions
 
-> Applies to version **2.11.2** (2026-11-24). This document describes the code as it **is**;
+> Applies to version **2.12.0** (2026-11-25). This document describes the code as it **is**;
 > when the two disagree, the code wins. Only implementations you can point at in the repository
 > are described here — pure design discussion belongs elsewhere.
 >

@@ -12,7 +12,7 @@
 
       格式必须是 a.b.c（major≤213、minor≤99、patch≤99，受 Android versionCode 编码限制）。
     -->
-    <Version>2.11.2</Version>
+    <Version>2.12.0</Version>
 
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
